@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -22,10 +22,24 @@ import {
   X,
   RefreshCw,
   AlertCircle,
+  Loader2,
+  Send,
+  Copy,
+  Zap,
+  ChevronDown,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getScoreBgColor, getGrade, getSourceConfig, getPriorityConfig, formatDate, formatRelativeTime } from '@/lib/utils';
 import type { Lead, DeepAudit, ActivityLog } from '@/lib/types';
+
+interface Pitch {
+  id: string;
+  pitch_type: string;
+  title: string;
+  status: string;
+  view_count: number;
+  created_at: string;
+}
 
 function AuditCheck({ label, value, type = 'boolean' }: { label: string; value: boolean | number | null; type?: 'boolean' | 'score' }) {
   if (value === null || value === undefined) {
@@ -77,6 +91,22 @@ export default function LeadDetailPage() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [ghlLoading, setGhlLoading] = useState(false);
   const [deepAuditLoading, setDeepAuditLoading] = useState(false);
+  const [pitches, setPitches] = useState<Pitch[]>([]);
+  const [pitchLoading, setPitchLoading] = useState(false);
+  const [showPitchMenu, setShowPitchMenu] = useState(false);
+  const [copiedPitchId, setCopiedPitchId] = useState<string | null>(null);
+  const pitchMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close pitch menu on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (pitchMenuRef.current && !pitchMenuRef.current.contains(e.target as Node)) {
+        setShowPitchMenu(false);
+      }
+    };
+    if (showPitchMenu) document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showPitchMenu]);
 
   const fetchLead = async () => {
     try {
@@ -109,6 +139,15 @@ export default function LeadDetailPage() {
         .limit(20);
 
       setActivities(actData || []);
+
+      // Fetch pitches for this lead
+      const { data: pitchData } = await supabase
+        .from('pitches')
+        .select('id, pitch_type, title, status, view_count, created_at')
+        .eq('lead_id', leadId)
+        .order('created_at', { ascending: false });
+
+      setPitches(pitchData || []);
     } catch (error) {
       console.error('Failed to fetch lead:', error);
     } finally {
@@ -186,6 +225,45 @@ export default function LeadDetailPage() {
     router.push('/leads');
   };
 
+  const handleGeneratePitch = async (pitchType: string) => {
+    if (!lead) return;
+    setPitchLoading(true);
+    setShowPitchMenu(false);
+    try {
+      const response = await fetch('/api/pitch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadId: lead.id, pitchType }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Pitch generation failed');
+      await fetchLead();
+    } catch (error) {
+      console.error('Pitch generation failed:', error);
+      alert(error instanceof Error ? error.message : 'Pitch generation failed');
+    } finally {
+      setPitchLoading(false);
+    }
+  };
+
+  const handleCopyPitchUrl = (pitchId: string) => {
+    const url = `${window.location.origin}/pitch/${pitchId}`;
+    navigator.clipboard.writeText(url);
+    setCopiedPitchId(pitchId);
+    setTimeout(() => setCopiedPitchId(null), 2000);
+  };
+
+  const getPitchTypeConfig = (type: string) => {
+    const configs: Record<string, { label: string; emoji: string; color: string; description: string }> = {
+      seo: { label: 'SEO Pitch', emoji: '🔍', color: 'bg-blue-500/20 text-blue-400 border-blue-500/40', description: 'Show them their missing Google rankings' },
+      reviews: { label: 'Reviews Pitch', emoji: '⭐', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40', description: 'Highlight their reputation gaps' },
+      ai_visibility: { label: 'AI Visibility Pitch', emoji: '🤖', color: 'bg-purple-500/20 text-purple-400 border-purple-500/40', description: 'Show they\'re invisible to ChatGPT & AI search' },
+      competitor: { label: 'Competitor Pitch', emoji: '⚔️', color: 'bg-orange-500/20 text-orange-400 border-orange-500/40', description: 'Compare them against local competitors' },
+      comprehensive: { label: 'Full Pitch', emoji: '🚀', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40', description: 'Complete digital domination roadmap' },
+    };
+    return configs[type] || { label: type, emoji: '📄', color: 'bg-gray-500/20 text-gray-400 border-gray-500/40', description: '' };
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -226,6 +304,32 @@ export default function LeadDetailPage() {
             {deepAuditLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Microscope className="w-3.5 h-3.5" />}
             Deep Audit
           </button>
+          <div className="relative" ref={pitchMenuRef}>
+            <button onClick={() => setShowPitchMenu(!showPitchMenu)} disabled={pitchLoading} className="btn text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-500/30">
+              {pitchLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+              Generate Pitch
+              <ChevronDown className="w-3 h-3" />
+            </button>
+            {showPitchMenu && (
+              <div className="absolute right-0 top-full mt-1 w-72 bg-prospex-card border border-prospex-border rounded-lg shadow-xl z-50 overflow-hidden">
+                <div className="p-2 border-b border-prospex-border">
+                  <p className="text-[10px] font-mono text-prospex-dim uppercase px-2">Select pitch type</p>
+                </div>
+                {['seo', 'reviews', 'ai_visibility', 'competitor', 'comprehensive'].map(type => {
+                  const config = getPitchTypeConfig(type);
+                  return (
+                    <button key={type} onClick={() => handleGeneratePitch(type)} className="w-full text-left px-4 py-3 hover:bg-prospex-surface transition-colors flex items-start gap-3 border-b border-prospex-border/30 last:border-0">
+                      <span className="text-lg">{config.emoji}</span>
+                      <div>
+                        <p className="text-sm font-medium text-prospex-text">{config.label}</p>
+                        <p className="text-[11px] text-prospex-dim mt-0.5">{config.description}</p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           {lead.phone && (
             <a href={`https://wa.me/${lead.phone.replace(/[^0-9]/g, "")}?text=Hi%2C%20I%20came%20across%20your%20business%20and%20wanted%20to%20reach%20out.`} target="_blank" rel="noopener noreferrer" className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/40 hover:bg-green-500/30">
               <MessageCircle className="w-3.5 h-3.5" /> WhatsApp
@@ -413,6 +517,67 @@ export default function LeadDetailPage() {
               </p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Pitches */}
+      {(pitches.length > 0 || pitchLoading) && (
+        <div className="card p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-mono font-semibold text-prospex-text flex items-center gap-2">
+              <Zap className="w-5 h-5 text-emerald-400" />
+              Generated Pitches
+            </h2>
+            <span className="text-xs text-prospex-dim font-mono">{pitches.length} pitch{pitches.length !== 1 ? 'es' : ''}</span>
+          </div>
+          {pitchLoading && (
+            <div className="flex items-center gap-3 p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-lg mb-4">
+              <Loader2 className="w-5 h-5 text-emerald-400 animate-spin" />
+              <div>
+                <p className="text-sm font-medium text-emerald-400">Generating pitch...</p>
+                <p className="text-xs text-prospex-dim mt-0.5">Analyzing audit data and building your pitch page</p>
+              </div>
+            </div>
+          )}
+          <div className="space-y-3">
+            {pitches.map(pitch => {
+              const config = getPitchTypeConfig(pitch.pitch_type);
+              const pitchUrl = `${typeof window !== 'undefined' ? window.location.origin : ''}/pitch/${pitch.id}`;
+              return (
+                <div key={pitch.id} className="flex items-center justify-between p-4 bg-prospex-surface/50 border border-prospex-border/30 rounded-lg hover:border-prospex-border transition-colors">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xl">{config.emoji}</span>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-prospex-text truncate">{pitch.title}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className={cn('badge text-[10px]', config.color)}>{config.label}</span>
+                        <span className="text-[10px] text-prospex-dim font-mono">{formatRelativeTime(pitch.created_at)}</span>
+                        {pitch.view_count > 0 && (
+                          <span className="text-[10px] text-prospex-cyan font-mono">👁 {pitch.view_count} view{pitch.view_count !== 1 ? 's' : ''}</span>
+                        )}
+                        {pitch.status === 'viewed' && (
+                          <span className="badge text-[10px] bg-prospex-green/20 text-prospex-green border-prospex-green/40">Viewed</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 ml-4">
+                    <button onClick={() => handleCopyPitchUrl(pitch.id)} className="btn-ghost text-xs">
+                      {copiedPitchId === pitch.id ? <><Check className="w-3.5 h-3.5 text-prospex-green" /> Copied</> : <><Copy className="w-3.5 h-3.5" /> Copy Link</>}
+                    </button>
+                    <a href={`/pitch/${pitch.id}`} target="_blank" rel="noopener noreferrer" className="btn-ghost text-xs">
+                      <ExternalLink className="w-3.5 h-3.5" /> View
+                    </a>
+                    {lead?.phone && (
+                      <a href={`https://wa.me/${lead.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(`Hi! I put together a quick report for ${lead.business_name} — take a look: ${pitchUrl}`)}`} target="_blank" rel="noopener noreferrer" className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/40 hover:bg-green-500/30">
+                        <Send className="w-3.5 h-3.5" /> Send
+                      </a>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
