@@ -80,6 +80,8 @@ async function scrapeGoogleMaps(niche: string, location: string, country: string
     language: 'en',
     async: 'false',
     dropDuplicates: 'true',
+    extractContacts: 'true', // Extract emails/phones from websites
+    enrichment: 'emails_and_contacts', // Enable email enrichment
   });
 
   const url = `https://api.app.outscraper.com/maps/search-v3?${params.toString()}`;
@@ -96,15 +98,24 @@ async function scrapeGoogleMaps(niche: string, location: string, country: string
   const mapped: LeadResult[] = items
     .filter(item => item.name)
     .map(item => {
+      // Emails: Outscraper returns in multiple fields depending on plan
+      const emailRaw = item.email || item.email_1 || item.contact_email 
+        || (Array.isArray(item.emails) && item.emails.length > 0 ? item.emails[0] : null)
+        || (Array.isArray(item.emails_and_contacts) && item.emails_and_contacts.length > 0 ? item.emails_and_contacts[0] : null);
+      // Phones: multiple possible fields
+      const phoneRaw = item.phone || item.phone_1 
+        || (Array.isArray(item.phones) && item.phones.length > 0 ? item.phones[0] : null);
+      // Instagram: check social_links array + direct field
       const socialLinks = Array.isArray(item.social_links) ? (item.social_links as string[]) : [];
-      const ig = socialLinks.find(l => typeof l === 'string' && l.includes('instagram.com')) || null;
-      const emailRaw = item.email || (Array.isArray(item.emails) && item.emails.length > 0 ? item.emails[0] : null);
+      const igFromSocial = socialLinks.find(l => typeof l === 'string' && l.includes('instagram.com')) || null;
+      const igFromField = typeof item.instagram === 'string' ? item.instagram : null;
+      const ig = igFromSocial || igFromField;
       return {
         business_name: String(item.name || 'Unknown'),
         address: item.full_address ? String(item.full_address) : (item.address ? String(item.address) : null),
         city: item.city ? String(item.city) : location,
         country: item.country ? String(item.country) : country,
-        phone: item.phone ? String(item.phone) : null,
+        phone: phoneRaw ? String(phoneRaw) : null,
         email: typeof emailRaw === 'string' ? emailRaw : null,
         website: item.site ? String(item.site) : (item.website ? String(item.website) : null),
         instagram_url: ig ? String(ig) : null,
@@ -460,6 +471,155 @@ async function scrapeBarkFirecrawl(niche: string, location: string, country: str
   } catch { return []; }
 }
 
+// ─── AUTO ENRICHMENT ───────────────────────────────────────────
+// Crawl business websites to extract emails, phones, and Instagram
+async function enrichFromWebsite(lead: LeadResult): Promise<LeadResult> {
+  if (!lead.website) return lead;
+  // Skip if already has both email and instagram
+  if (lead.email && lead.instagram_url) return lead;
+
+  const firecrawlKey = getKey('FIRECRAWL_API_KEY');
+  if (!firecrawlKey) return lead;
+
+  try {
+    // Crawl the website + contact page
+    const urls = [lead.website];
+    const domain = lead.website.replace(/https?:\/\//, '').replace(/\/$/, '');
+    // Also try common contact pages
+    const contactPaths = ['/contact', '/contact-us', '/about', '/about-us'];
+    
+    let allText = '';
+
+    for (const targetUrl of urls) {
+      try {
+        const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${firecrawlKey}` },
+          body: JSON.stringify({ 
+            url: targetUrl, 
+            formats: ['markdown'],
+            onlyMainContent: false, // Get full page including footer (where contact info often lives)
+          }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          allText += (data?.data?.markdown || '') + '\n';
+        }
+      } catch {
+        // Skip failed pages
+      }
+    }
+
+    // Try contact page too (often has email/phone)
+    if (!lead.email) {
+      for (const path of contactPaths) {
+        try {
+          const contactUrl = `https://${domain}${path}`;
+          const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${firecrawlKey}` },
+            body: JSON.stringify({ url: contactUrl, formats: ['markdown'], onlyMainContent: false }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            const md = data?.data?.markdown || '';
+            if (md.length > 100) { // Got real content
+              allText += md + '\n';
+              break; // Found a working contact page, stop trying others
+            }
+          }
+        } catch {
+          // Skip
+        }
+      }
+    }
+
+    if (allText.length === 0) return lead;
+
+    // Extract emails
+    if (!lead.email) {
+      const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const emails = (allText.match(emailRegex) || []).filter(e => {
+        const lower = e.toLowerCase();
+        return !lower.endsWith('.png') && !lower.endsWith('.jpg') && !lower.endsWith('.gif') &&
+          !lower.endsWith('.svg') && !lower.endsWith('.webp') && !lower.endsWith('.css') &&
+          !lower.endsWith('.js') && !lower.includes('example.com') && !lower.includes('sentry') &&
+          !lower.includes('webpack') && !lower.includes('wixpress') && !lower.includes('schema.org') &&
+          !lower.includes('googleapis') && !lower.includes('cloudflare') &&
+          !lower.includes('@2x') && !lower.includes('noreply') && !lower.includes('no-reply') &&
+          lower.length < 60 && lower.length > 5;
+      });
+      // Prefer emails with the business domain, then info@, hello@, contact@
+      const domainClean = domain.replace('www.', '');
+      const sorted = emails.sort((a, b) => {
+        const aIsDomain = a.includes(domainClean) ? 0 : 1;
+        const bIsDomain = b.includes(domainClean) ? 0 : 1;
+        if (aIsDomain !== bIsDomain) return aIsDomain - bIsDomain;
+        const prefOrder = ['info@', 'hello@', 'contact@', 'enquiries@', 'bookings@', 'reception@'];
+        const aIdx = prefOrder.findIndex(p => a.toLowerCase().startsWith(p));
+        const bIdx = prefOrder.findIndex(p => b.toLowerCase().startsWith(p));
+        return (aIdx === -1 ? 99 : aIdx) - (bIdx === -1 ? 99 : bIdx);
+      });
+      if (sorted.length > 0) {
+        lead.email = sorted[0];
+      }
+    }
+
+    // Extract Instagram
+    if (!lead.instagram_url) {
+      const igRegex = /(?:https?:\/\/)?(?:www\.)?instagram\.com\/([a-zA-Z0-9_.]{2,30})\/?/gi;
+      const igMatches: string[] = [];
+      let match;
+      while ((match = igRegex.exec(allText)) !== null) {
+        const handle = match[1].toLowerCase();
+        // Filter out generic Instagram paths
+        if (!['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'about', 'developer', 'legal', 'privacy', 'terms', 'help'].includes(handle)) {
+          igMatches.push(`https://instagram.com/${match[1]}`);
+        }
+      }
+      if (igMatches.length > 0) {
+        lead.instagram_url = igMatches[0];
+      }
+    }
+
+    // Extract phone if missing
+    if (!lead.phone) {
+      const phoneRegex = /(?:tel:|phone:|call\s*:?\s*)?(\+?[\d][\d\s()-]{9,18}\d)/gi;
+      const phones = (allText.match(phoneRegex) || [])
+        .map(p => p.replace(/^(tel:|phone:|call\s*:?\s*)/i, '').trim())
+        .filter(p => {
+          const digits = p.replace(/\D/g, '');
+          return digits.length >= 10 && digits.length <= 15;
+        });
+      if (phones.length > 0) {
+        lead.phone = phones[0];
+      }
+    }
+
+    return lead;
+  } catch {
+    return lead;
+  }
+}
+
+// Enrich multiple leads in parallel with concurrency limit
+async function enrichLeadsBatch(leads: LeadResult[], maxConcurrent: number = 5): Promise<LeadResult[]> {
+  const needsEnrichment = leads.filter(l => l.website && (!l.email || !l.instagram_url));
+  const alreadyComplete = leads.filter(l => !l.website || (l.email && l.instagram_url));
+  
+  if (needsEnrichment.length === 0) return leads;
+
+  // Process in batches to avoid overwhelming the API
+  const enriched: LeadResult[] = [];
+  for (let i = 0; i < needsEnrichment.length; i += maxConcurrent) {
+    const batch = needsEnrichment.slice(i, i + maxConcurrent);
+    const results = await Promise.all(batch.map(lead => enrichFromWebsite(lead)));
+    enriched.push(...results);
+  }
+
+  return [...alreadyComplete, ...enriched];
+}
+
 // ─── MAIN HANDLER ──────────────────────────────────────────────
 export async function POST(request: NextRequest) {
   try {
@@ -506,10 +666,33 @@ export async function POST(request: NextRequest) {
       return true;
     });
 
+    // ★ AUTO-ENRICH: Crawl websites to find emails + Instagram + phone
+    // Only enriches leads that have a website but are missing email or Instagram
+    const firecrawlKey = getKey('FIRECRAWL_API_KEY');
+    let enrichedResults = unique;
+    if (firecrawlKey) {
+      try {
+        // Limit to first 15 results to keep response time reasonable
+        const toEnrich = unique.slice(0, 15);
+        const remaining = unique.slice(15);
+        const enriched = await enrichLeadsBatch(toEnrich, 3);
+        enrichedResults = [...enriched, ...remaining];
+      } catch {
+        // If enrichment fails, return un-enriched results
+        enrichedResults = unique;
+      }
+    }
+
+    // Count enrichment stats
+    const withEmail = enrichedResults.filter(r => r.email).length;
+    const withPhone = enrichedResults.filter(r => r.phone).length;
+    const withInstagram = enrichedResults.filter(r => r.instagram_url).length;
+
     return NextResponse.json({
-      results: unique,
-      count: unique.length,
+      results: enrichedResults,
+      count: enrichedResults.length,
       sourceStats,
+      enrichmentStats: { withEmail, withPhone, withInstagram },
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err: unknown) {
