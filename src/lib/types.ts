@@ -11,7 +11,7 @@ export interface Lead {
   google_rating: number | null;
   google_review_count: number | null;
   google_maps_url: string | null;
-  source: 'google_maps' | 'yelp' | 'fresha';
+  source: 'google_maps' | 'yelp' | 'fresha' | 'yell' | 'yellow_pages' | 'bark' | 'csv_import';
   lead_score: number | null;
   lead_grade: string | null;
   lead_priority: 'hot' | 'warm' | 'cold' | null;
@@ -20,6 +20,8 @@ export interface Lead {
   audit_data: AuditData | null;
   deep_audit_score: number | null;
   deep_audit_status: 'pending' | 'running' | 'complete' | 'error' | null;
+  ad_detection_data: Record<string, unknown> | null;
+  ad_score: number | null;
   ghl_contact_id: string | null;
   ghl_pushed_at: string | null;
   search_id: string | null;
@@ -184,7 +186,7 @@ export interface Pitch {
   id: string;
   lead_id: string;
   deep_audit_id: string | null;
-  pitch_type: 'seo' | 'reviews' | 'ai_visibility' | 'competitor' | 'comprehensive';
+  pitch_type: 'seo' | 'reviews' | 'ai_visibility' | 'competitor' | 'advertising' | 'comprehensive';
   title: string;
   content: PitchContent;
   agency_name: string | null;
@@ -202,13 +204,27 @@ export interface Pitch {
 
 export interface PitchContent {
   hook: string;
-  problem: string;
-  proof: string;
-  solution: string;
-  result: string;
-  cta: string;
+  summary: string;
+  overall_score: number | null;
+  problems: PitchProblem[];
   data_points: PitchDataPoint[];
   competitor_comparisons: PitchComparison[];
+  roadmap: { phase: string; timeframe: string; actions: string[] }[];
+  result: string;
+  cta: string;
+  // Legacy fields for backwards compatibility
+  problem?: string;
+  proof?: string;
+  solution?: string;
+}
+
+export interface PitchProblem {
+  title: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  finding: string;
+  impact: string;
+  solution: string;
+  timeline: string;
 }
 
 export interface PitchDataPoint {
@@ -229,7 +245,7 @@ export interface ScrapeRequest {
   niche: string;
   location: string;
   country: string;
-  source: 'google_maps' | 'yelp' | 'fresha' | 'all';
+  source: 'google_maps' | 'yelp' | 'fresha' | 'yell' | 'yellow_pages' | 'bark' | 'all';
 }
 
 export interface ScrapeResult {
@@ -244,7 +260,7 @@ export interface ScrapeResult {
   google_rating: number | null;
   google_review_count: number | null;
   google_maps_url: string | null;
-  source: 'google_maps' | 'yelp' | 'fresha';
+  source: string;
 }
 
 export type SortDirection = 'asc' | 'desc';
