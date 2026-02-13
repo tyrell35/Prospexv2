@@ -2,118 +2,133 @@ import { NextRequest, NextResponse } from 'next/server';
 
 function getKey(envKey: string): string { return process.env[envKey] || ''; }
 
-// Safely extract array of results from various API response formats
-function safeArray(data: unknown): Record<string, unknown>[] {
-  if (Array.isArray(data)) {
-    // Could be array of arrays [[{...}]] or flat [{...}]
-    if (data.length > 0 && Array.isArray(data[0])) {
-      return data[0] as Record<string, unknown>[];
+// ─── LOCATION FILTER ───────────────────────────────────────────
+// Post-filter results to only include businesses in the searched location
+function matchesLocation(result: Record<string, unknown>, searchLocation: string): boolean {
+  const loc = searchLocation.toLowerCase().trim();
+  // Check address, city, and full_address fields
+  const fieldsToCheck = [
+    result.address,
+    result.full_address,
+    result.city,
+    result.area,
+    result.state,
+    result.suburb,
+  ];
+  for (const field of fieldsToCheck) {
+    if (typeof field === 'string' && field.toLowerCase().includes(loc)) {
+      return true;
     }
-    return data as Record<string, unknown>[];
   }
-  if (data && typeof data === 'object' && !Array.isArray(data)) {
-    // Could be { data: [...] } or { results: [...] }
+  return false;
+}
+
+// Safely extract array from various API response shapes
+function safeArray(data: unknown): Record<string, unknown>[] {
+  if (!data) return [];
+  if (Array.isArray(data)) {
+    if (data.length > 0 && Array.isArray(data[0])) {
+      return (data[0] as unknown[]).filter(
+        (item): item is Record<string, unknown> => item !== null && typeof item === 'object' && !Array.isArray(item)
+      );
+    }
+    return data.filter(
+      (item): item is Record<string, unknown> => item !== null && typeof item === 'object' && !Array.isArray(item)
+    );
+  }
+  if (typeof data === 'object') {
     const obj = data as Record<string, unknown>;
     if (Array.isArray(obj.data)) return safeArray(obj.data);
-    if (Array.isArray(obj.results)) return obj.results as Record<string, unknown>[];
+    if (Array.isArray(obj.results)) return safeArray(obj.results);
   }
   return [];
 }
 
-// Map Outscraper item to our lead format
-function mapOutscraperItem(item: Record<string, unknown>, location: string, country: string): Record<string, unknown> {
-  const socialLinks = Array.isArray(item.social_links) ? item.social_links as string[] : [];
-  const instagram = socialLinks.find((l: string) => typeof l === 'string' && l.includes('instagram.com')) || null;
-  return {
-    business_name: item.name || item.query || 'Unknown',
-    address: item.full_address || item.address || null,
-    city: item.city || location,
-    country: item.country || country,
-    phone: item.phone || null,
-    email: typeof item.email === 'string' ? item.email : (Array.isArray(item.emails) && item.emails.length > 0 ? item.emails[0] : null),
-    website: item.site || item.website || null,
-    instagram_url: instagram,
-    google_rating: typeof item.rating === 'number' ? item.rating : null,
-    google_review_count: typeof item.reviews === 'number' ? item.reviews : (typeof item.reviews_count === 'number' ? item.reviews_count : null),
-    google_maps_url: item.google_maps_url || item.place_url || null,
-    source: 'google_maps',
-  };
+interface LeadResult {
+  business_name: string;
+  address: string | null;
+  city: string | null;
+  country: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  instagram_url: string | null;
+  google_rating: number | null;
+  google_review_count: number | null;
+  google_maps_url: string | null;
+  source: string;
 }
 
 // ─── GOOGLE MAPS (Outscraper) ──────────────────────────────────
-async function scrapeGoogleMaps(niche: string, location: string, country: string): Promise<Record<string, unknown>[]> {
+async function scrapeGoogleMaps(niche: string, location: string, country: string): Promise<LeadResult[]> {
   const apiKey = getKey('OUTSCRAPER_API_KEY');
   if (!apiKey) throw new Error('Outscraper API key not configured. Add it in Settings.');
 
   const regionMap: Record<string, string> = {
     'United States': 'us', 'United Kingdom': 'gb', 'Canada': 'ca', 'Australia': 'au',
-    'Ireland': 'ie', 'Germany': 'de', 'France': 'fr', 'Spain': 'es', 'Italy': 'it', 'Netherlands': 'nl'
+    'Ireland': 'ie', 'Germany': 'de', 'France': 'fr', 'Spain': 'es', 'Italy': 'it', 'Netherlands': 'nl',
   };
   const region = regionMap[country] || 'gb';
 
-  // Use precise query format: "niche near location, country"
-  // Adding "near" helps Outscraper scope to the exact location
-  const query = `${niche} near ${location}, ${country}`;
+  // Precise comma-separated format works best for Outscraper location accuracy
+  const query = `${niche}, ${location}, ${country}`;
 
   const params = new URLSearchParams({
     query,
-    limit: '30',
+    limit: '50', // Fetch extra so we still have ~30 after location filtering
     region,
     language: 'en',
     async: 'false',
     dropDuplicates: 'true',
-    enrichment: 'emails_and_contacts', // Enables email extraction
   });
 
   const url = `https://api.app.outscraper.com/maps/search-v3?${params.toString()}`;
-
-  const response = await fetch(url, {
-    headers: { 'X-API-KEY': apiKey },
-  });
+  const response = await fetch(url, { headers: { 'X-API-KEY': apiKey } });
 
   if (!response.ok) {
-    const errorText = await response.text().catch(() => 'Unknown error');
-    throw new Error(`Outscraper error (${response.status}): ${errorText.slice(0, 200)}`);
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Outscraper error (${response.status}): ${errText.slice(0, 200)}`);
   }
 
   const rawData = await response.json();
+  const items = safeArray(rawData);
 
-  // Debug: log the shape of the response (remove in production)
-  console.log('Outscraper response shape:', {
-    type: typeof rawData,
-    isArray: Array.isArray(rawData),
-    keys: rawData && typeof rawData === 'object' ? Object.keys(rawData) : 'N/A',
-    dataType: rawData?.data ? typeof rawData.data : 'N/A',
-    dataIsArray: Array.isArray(rawData?.data),
-    dataLength: Array.isArray(rawData?.data) ? rawData.data.length : 'N/A',
-    firstItemType: Array.isArray(rawData?.data) && rawData.data.length > 0 ? typeof rawData.data[0] : 'N/A',
-    firstItemIsArray: Array.isArray(rawData?.data) && rawData.data.length > 0 ? Array.isArray(rawData.data[0]) : 'N/A',
+  const mapped: LeadResult[] = items
+    .filter(item => item.name)
+    .map(item => {
+      const socialLinks = Array.isArray(item.social_links) ? (item.social_links as string[]) : [];
+      const ig = socialLinks.find(l => typeof l === 'string' && l.includes('instagram.com')) || null;
+      const emailRaw = item.email || (Array.isArray(item.emails) && item.emails.length > 0 ? item.emails[0] : null);
+      return {
+        business_name: String(item.name || 'Unknown'),
+        address: item.full_address ? String(item.full_address) : (item.address ? String(item.address) : null),
+        city: item.city ? String(item.city) : location,
+        country: item.country ? String(item.country) : country,
+        phone: item.phone ? String(item.phone) : null,
+        email: typeof emailRaw === 'string' ? emailRaw : null,
+        website: item.site ? String(item.site) : (item.website ? String(item.website) : null),
+        instagram_url: ig ? String(ig) : null,
+        google_rating: typeof item.rating === 'number' ? item.rating : null,
+        google_review_count: typeof item.reviews === 'number' ? item.reviews : (typeof item.reviews_count === 'number' ? item.reviews_count : null),
+        google_maps_url: item.google_maps_url ? String(item.google_maps_url) : null,
+        source: 'google_maps',
+      };
+    });
+
+  // ★ KEY FIX: Filter to only results actually in the searched location
+  const filtered = mapped.filter(r => {
+    const address = (r.address || '').toLowerCase();
+    const city = (r.city || '').toLowerCase();
+    const loc = location.toLowerCase().trim();
+    return address.includes(loc) || city.includes(loc) || city === loc;
   });
 
-  // Robust extraction — handles all known Outscraper response formats
-  let items: Record<string, unknown>[] = [];
-
-  if (rawData && typeof rawData === 'object') {
-    if (Array.isArray(rawData)) {
-      // Direct array: [{...}, {...}] or [[{...}]]
-      items = safeArray(rawData);
-    } else if (rawData.data !== undefined) {
-      // Wrapped: { data: [...] } or { data: [[...]] }
-      items = safeArray(rawData.data);
-    } else if (rawData.results !== undefined) {
-      items = safeArray(rawData.results);
-    }
-  }
-
-  // Filter out non-object entries and map
-  return items
-    .filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object' && !Array.isArray(item))
-    .filter(item => item.name || item.query) // Must have a business name
-    .map(item => mapOutscraperItem(item, location, country));
+  // If filtering removed everything (location name might be formatted differently), return unfiltered
+  return filtered.length > 0 ? filtered.slice(0, 30) : mapped.slice(0, 30);
 }
 
 // ─── YELP (Apify) ──────────────────────────────────────────────
-async function scrapeYelp(niche: string, location: string, country: string): Promise<Record<string, unknown>[]> {
+async function scrapeYelp(niche: string, location: string, country: string): Promise<LeadResult[]> {
   const apiToken = getKey('APIFY_API_TOKEN');
   if (!apiToken) throw new Error('Apify API token not configured. Add it in Settings.');
 
@@ -128,22 +143,18 @@ async function scrapeYelp(niche: string, location: string, country: string): Pro
     }),
   });
 
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => 'Unknown error');
-    throw new Error(`Yelp scrape error (${response.status}): ${errorText.slice(0, 200)}`);
-  }
-
+  if (!response.ok) throw new Error(`Yelp error (${response.status})`);
   const rawData = await response.json();
   const items = Array.isArray(rawData) ? rawData : [];
 
   return items.map((item: Record<string, unknown>) => ({
-    business_name: item.name || item.bizName || 'Unknown',
-    address: item.address || item.fullAddress || null,
+    business_name: String(item.name || item.bizName || 'Unknown'),
+    address: item.address ? String(item.address) : (item.fullAddress ? String(item.fullAddress) : null),
     city: location,
     country,
-    phone: item.phone || null,
-    email: item.email || null,
-    website: item.website || item.bizUrl || null,
+    phone: item.phone ? String(item.phone) : null,
+    email: item.email ? String(item.email) : null,
+    website: item.website ? String(item.website) : (item.bizUrl ? String(item.bizUrl) : null),
     instagram_url: null,
     google_rating: typeof item.rating === 'number' ? item.rating : null,
     google_review_count: typeof item.reviewCount === 'number' ? item.reviewCount : null,
@@ -153,12 +164,11 @@ async function scrapeYelp(niche: string, location: string, country: string): Pro
 }
 
 // ─── FRESHA (Apify) ────────────────────────────────────────────
-async function scrapeFresha(niche: string, location: string, country: string): Promise<Record<string, unknown>[]> {
+async function scrapeFresha(niche: string, location: string, country: string): Promise<LeadResult[]> {
   const apiToken = getKey('APIFY_API_TOKEN');
   if (!apiToken) return [];
-
-  const searchUrl = `https://www.fresha.com/search?query=${encodeURIComponent(niche)}&location=${encodeURIComponent(location + ', ' + country)}`;
   try {
+    const searchUrl = `https://www.fresha.com/search?query=${encodeURIComponent(niche)}&location=${encodeURIComponent(location + ', ' + country)}`;
     const url = `https://api.apify.com/v2/acts/apify/web-scraper/run-sync-get-dataset-items?token=${apiToken}`;
     const response = await fetch(url, {
       method: 'POST',
@@ -171,162 +181,283 @@ async function scrapeFresha(niche: string, location: string, country: string): P
     });
     if (!response.ok) return [];
     const rawData = await response.json();
-    const items = Array.isArray(rawData) ? rawData.flat() : [];
-
-    return items
-      .filter((item: Record<string, unknown>) => item.name)
-      .map((item: Record<string, unknown>) => ({
-        business_name: item.name || 'Unknown',
-        address: item.address || null,
-        city: location,
-        country,
-        phone: null,
-        email: null,
-        website: null,
-        instagram_url: null,
-        google_rating: typeof item.rating === 'number' ? item.rating : null,
-        google_review_count: typeof item.reviewCount === 'number' ? item.reviewCount : null,
-        google_maps_url: null,
-        source: 'fresha',
-      }));
-  } catch {
-    return [];
-  }
+    const items = Array.isArray(rawData) ? rawData.flat().filter((i: unknown) => i && typeof i === 'object') : [];
+    return items.filter((item: Record<string, unknown>) => item.name).map((item: Record<string, unknown>) => ({
+      business_name: String(item.name),
+      address: item.address ? String(item.address) : null,
+      city: location, country,
+      phone: null, email: null, website: null, instagram_url: null,
+      google_rating: typeof item.rating === 'number' ? item.rating : null,
+      google_review_count: typeof item.reviewCount === 'number' ? item.reviewCount : null,
+      google_maps_url: null, source: 'fresha',
+    }));
+  } catch { return []; }
 }
 
-// ─── YELL.COM (Firecrawl - FREE UK directory) ──────────────────
-async function scrapeYell(niche: string, location: string): Promise<Record<string, unknown>[]> {
+// ─── YELL.COM (Apify Web Scraper - UK) ─────────────────────────
+async function scrapeYell(niche: string, location: string): Promise<LeadResult[]> {
+  const apiToken = getKey('APIFY_API_TOKEN');
+  if (!apiToken) {
+    // Fallback: try Firecrawl
+    return scrapeYellFirecrawl(niche, location);
+  }
+  try {
+    const searchUrl = `https://www.yell.com/ucs/UcsSearchAction.do?keywords=${encodeURIComponent(niche)}&location=${encodeURIComponent(location)}`;
+    const url = `https://api.apify.com/v2/acts/apify/web-scraper/run-sync-get-dataset-items?token=${apiToken}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        startUrls: [{ url: searchUrl }],
+        pageFunction: `async function pageFunction(context) {
+          const { $, request } = context;
+          const results = [];
+          $('.businessCapsule--mainRow').each((i, el) => {
+            const name = $(el).find('.businessCapsule--name a').text().trim();
+            const phone = $(el).find('.businessCapsule--phone a').text().trim();
+            const website = $(el).find('.businessCapsule--ctaBtn a[href*="http"]').attr('href') || null;
+            const address = $(el).find('.businessCapsule--address').text().trim();
+            const rating = parseFloat($(el).find('.stars--rating').text()) || null;
+            const reviewCount = parseInt($(el).find('.stars--count').text().replace(/[^0-9]/g, '')) || null;
+            if (name) results.push({ name, phone: phone || null, website, address: address || null, rating, reviewCount });
+          });
+          return results;
+        }`,
+        maxPagesPerCrawl: 1,
+      }),
+    });
+    if (!response.ok) return scrapeYellFirecrawl(niche, location);
+    const rawData = await response.json();
+    const items = Array.isArray(rawData) ? rawData.flat().filter((i: unknown) => i && typeof i === 'object' && (i as Record<string, unknown>).name) : [];
+    if (items.length === 0) return scrapeYellFirecrawl(niche, location);
+    return items.map((item: Record<string, unknown>) => ({
+      business_name: String(item.name), address: item.address ? String(item.address) : null,
+      city: location, country: 'United Kingdom',
+      phone: item.phone ? String(item.phone) : null, email: null,
+      website: item.website ? String(item.website) : null, instagram_url: null,
+      google_rating: typeof item.rating === 'number' ? item.rating : null,
+      google_review_count: typeof item.reviewCount === 'number' ? item.reviewCount : null,
+      google_maps_url: null, source: 'yell',
+    }));
+  } catch { return scrapeYellFirecrawl(niche, location); }
+}
+
+// Yell.com Firecrawl fallback
+async function scrapeYellFirecrawl(niche: string, location: string): Promise<LeadResult[]> {
   const firecrawlKey = getKey('FIRECRAWL_API_KEY');
   if (!firecrawlKey) return [];
-
-  const searchUrl = `https://www.yell.com/ucs/UcsSearchAction.do?keywords=${encodeURIComponent(niche)}&location=${encodeURIComponent(location)}`;
   try {
+    const searchUrl = `https://www.yell.com/ucs/UcsSearchAction.do?keywords=${encodeURIComponent(niche)}&location=${encodeURIComponent(location)}`;
     const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${firecrawlKey}` },
-      body: JSON.stringify({ url: searchUrl, formats: ['markdown'] }),
+      body: JSON.stringify({ url: searchUrl, formats: ['links', 'markdown'] }),
     });
     if (!response.ok) return [];
     const data = await response.json();
-    const markdown = data?.data?.markdown || '';
-    const businesses: Record<string, unknown>[] = [];
-    const lines = markdown.split('\n');
-    let currentBiz: Record<string, string | null> = {};
+    const md: string = data?.data?.markdown || '';
+    const results: LeadResult[] = [];
 
-    for (const line of lines) {
-      if (line.startsWith('###') || line.startsWith('##')) {
-        if (currentBiz.business_name && currentBiz.business_name.length > 2) {
-          businesses.push({ ...currentBiz, source: 'yell' });
-        }
-        currentBiz = {
-          business_name: line.replace(/^#+\s*/, '').replace(/\[|\]/g, '').trim(),
-          address: null, phone: null, email: null, website: null, instagram_url: null,
-          google_rating: null, google_review_count: null, google_maps_url: null,
-          city: location, country: 'United Kingdom',
-        };
+    // Look for phone patterns and business names in proximity
+    const phoneRegex = /(\d{4,5}\s?\d{5,6}|\+44\s?\d{4}\s?\d{6}|0\d{2,4}\s?\d{3,4}\s?\d{3,4})/g;
+    const lines = md.split('\n').filter(l => l.trim().length > 0);
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // Business names are typically in bold or heading format
+      const nameMatch = line.match(/\*\*([^*]+)\*\*/) || line.match(/^#{1,3}\s+(.+)/);
+      if (nameMatch && nameMatch[1].length > 3 && nameMatch[1].length < 80) {
+        const name = nameMatch[1].replace(/\[|\]/g, '').trim();
+        if (['Yell', 'Results', 'Search', 'Sponsored', 'Page', 'Next', 'Previous', 'Filter'].some(skip => name.includes(skip))) continue;
+        // Look ahead for phone/website in next few lines
+        const context = lines.slice(i, i + 8).join(' ');
+        const phoneMatch = context.match(phoneRegex);
+        const urlMatch = context.match(/https?:\/\/(?!www\.yell\.com)[^\s)]+/);
+        const emailMatch = context.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+        results.push({
+          business_name: name, address: null, city: location, country: 'United Kingdom',
+          phone: phoneMatch ? phoneMatch[0] : null, email: emailMatch ? emailMatch[1] : null,
+          website: urlMatch ? urlMatch[0] : null, instagram_url: null,
+          google_rating: null, google_review_count: null, google_maps_url: null, source: 'yell',
+        });
       }
-      const phoneMatch = line.match(/(?:Tel|Phone|Call).*?(\+?[\d\s()-]{10,})/i);
-      if (phoneMatch && currentBiz.business_name) currentBiz.phone = phoneMatch[1].trim();
-      const emailMatch = line.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
-      if (emailMatch && currentBiz.business_name) currentBiz.email = emailMatch[1];
-      const urlMatch = line.match(/\((https?:\/\/[^)]+)\)/);
-      if (urlMatch && currentBiz.business_name && !urlMatch[1].includes('yell.com')) currentBiz.website = urlMatch[1];
     }
-    if (currentBiz.business_name && currentBiz.business_name.length > 2) {
-      businesses.push({ ...currentBiz, source: 'yell' });
-    }
-    return businesses.slice(0, 30);
-  } catch {
-    return [];
-  }
+    return results.slice(0, 25);
+  } catch { return []; }
 }
 
-// ─── YELLOW PAGES (Firecrawl - FREE US directory) ──────────────
-async function scrapeYellowPages(niche: string, location: string): Promise<Record<string, unknown>[]> {
+// ─── YELLOW PAGES (Apify Web Scraper - US) ─────────────────────
+async function scrapeYellowPages(niche: string, location: string): Promise<LeadResult[]> {
+  const apiToken = getKey('APIFY_API_TOKEN');
+  if (!apiToken) {
+    return scrapeYellowPagesFirecrawl(niche, location);
+  }
+  try {
+    const searchUrl = `https://www.yellowpages.com/search?search_terms=${encodeURIComponent(niche)}&geo_location_terms=${encodeURIComponent(location)}`;
+    const url = `https://api.apify.com/v2/acts/apify/web-scraper/run-sync-get-dataset-items?token=${apiToken}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        startUrls: [{ url: searchUrl }],
+        pageFunction: `async function pageFunction(context) {
+          const { $, request } = context;
+          const results = [];
+          $('.result').each((i, el) => {
+            const name = $(el).find('.business-name a').text().trim() || $(el).find('a.business-name').text().trim();
+            const phone = $(el).find('.phones').text().trim();
+            const website = $(el).find('a.track-visit-website').attr('href') || null;
+            const address = $(el).find('.street-address').text().trim();
+            const locality = $(el).find('.locality').text().trim();
+            if (name) results.push({ name, phone: phone || null, website, address: [address, locality].filter(Boolean).join(', ') || null });
+          });
+          return results;
+        }`,
+        maxPagesPerCrawl: 1,
+      }),
+    });
+    if (!response.ok) return scrapeYellowPagesFirecrawl(niche, location);
+    const rawData = await response.json();
+    const items = Array.isArray(rawData) ? rawData.flat().filter((i: unknown) => i && typeof i === 'object' && (i as Record<string, unknown>).name) : [];
+    if (items.length === 0) return scrapeYellowPagesFirecrawl(niche, location);
+    return items.map((item: Record<string, unknown>) => ({
+      business_name: String(item.name), address: item.address ? String(item.address) : null,
+      city: location, country: 'United States',
+      phone: item.phone ? String(item.phone) : null, email: null,
+      website: item.website ? String(item.website) : null, instagram_url: null,
+      google_rating: null, google_review_count: null, google_maps_url: null, source: 'yellow_pages',
+    }));
+  } catch { return scrapeYellowPagesFirecrawl(niche, location); }
+}
+
+// Yellow Pages Firecrawl fallback
+async function scrapeYellowPagesFirecrawl(niche: string, location: string): Promise<LeadResult[]> {
   const firecrawlKey = getKey('FIRECRAWL_API_KEY');
   if (!firecrawlKey) return [];
-
-  const searchUrl = `https://www.yellowpages.com/search?search_terms=${encodeURIComponent(niche)}&geo_location_terms=${encodeURIComponent(location)}`;
   try {
+    const searchUrl = `https://www.yellowpages.com/search?search_terms=${encodeURIComponent(niche)}&geo_location_terms=${encodeURIComponent(location)}`;
     const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${firecrawlKey}` },
-      body: JSON.stringify({ url: searchUrl, formats: ['markdown'] }),
+      body: JSON.stringify({ url: searchUrl, formats: ['links', 'markdown'] }),
     });
     if (!response.ok) return [];
     const data = await response.json();
-    const markdown = data?.data?.markdown || '';
-    const businesses: Record<string, unknown>[] = [];
-    const lines = markdown.split('\n');
-    let currentBiz: Record<string, string | null> = {};
+    const md: string = data?.data?.markdown || '';
+    const results: LeadResult[] = [];
+    const lines = md.split('\n').filter(l => l.trim().length > 0);
+    const usPhoneRegex = /\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}/;
 
-    for (const line of lines) {
-      if (line.startsWith('###') || line.startsWith('##')) {
-        if (currentBiz.business_name && currentBiz.business_name.length > 2) {
-          businesses.push({ ...currentBiz, source: 'yellow_pages' });
-        }
-        currentBiz = {
-          business_name: line.replace(/^#+\s*/, '').replace(/\[|\]/g, '').replace(/\d+\.\s*/, '').trim(),
-          address: null, phone: null, email: null, website: null, instagram_url: null,
-          google_rating: null, google_review_count: null, google_maps_url: null,
-          city: location, country: 'United States',
-        };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const nameMatch = line.match(/\*\*([^*]+)\*\*/) || line.match(/^#{1,3}\s+\d*\.?\s*(.+)/);
+      if (nameMatch) {
+        const name = (nameMatch[1] || nameMatch[2] || '').replace(/\[|\]/g, '').trim();
+        if (name.length < 3 || name.length > 80) continue;
+        if (['Yellow Pages', 'Results', 'Search', 'Sponsored', 'Page', 'Next', 'Filter', 'Sort', 'Map'].some(skip => name.includes(skip))) continue;
+        const context = lines.slice(i, i + 8).join(' ');
+        const phoneMatch = context.match(usPhoneRegex);
+        const urlMatch = context.match(/https?:\/\/(?!www\.yellowpages\.com)[^\s),"]+/);
+        results.push({
+          business_name: name, address: null, city: location, country: 'United States',
+          phone: phoneMatch ? phoneMatch[0] : null, email: null,
+          website: urlMatch ? urlMatch[0] : null, instagram_url: null,
+          google_rating: null, google_review_count: null, google_maps_url: null, source: 'yellow_pages',
+        });
       }
-      const phoneMatch = line.match(/\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}/);
-      if (phoneMatch && currentBiz.business_name) currentBiz.phone = phoneMatch[0];
-      const urlMatch = line.match(/\((https?:\/\/(?!www\.yellowpages)[^)]+)\)/);
-      if (urlMatch && currentBiz.business_name) currentBiz.website = urlMatch[1];
     }
-    if (currentBiz.business_name && currentBiz.business_name.length > 2) {
-      businesses.push({ ...currentBiz, source: 'yellow_pages' });
-    }
-    return businesses.filter(b => typeof b.business_name === 'string' && (b.business_name as string).length > 2).slice(0, 30);
-  } catch {
-    return [];
-  }
+    return results.slice(0, 25);
+  } catch { return []; }
 }
 
-// ─── BARK.COM (Firecrawl - businesses seeking marketing) ───────
-async function scrapeBark(niche: string, location: string, country: string): Promise<Record<string, unknown>[]> {
+// ─── BARK.COM (Apify Web Scraper) ──────────────────────────────
+async function scrapeBark(niche: string, location: string, country: string): Promise<LeadResult[]> {
+  const apiToken = getKey('APIFY_API_TOKEN');
+  if (!apiToken) {
+    return scrapeBarkFirecrawl(niche, location, country);
+  }
+  try {
+    // Bark uses slug-based URLs
+    const nicheSlug = niche.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const locationSlug = location.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const countryPrefix = country === 'United Kingdom' ? 'gb' : country === 'United States' ? 'us' : country === 'Canada' ? 'ca' : 'gb';
+    const searchUrl = `https://www.bark.com/en/${countryPrefix}/find/${nicheSlug}/${locationSlug}/`;
+
+    const url = `https://api.apify.com/v2/acts/apify/web-scraper/run-sync-get-dataset-items?token=${apiToken}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        startUrls: [{ url: searchUrl }],
+        pageFunction: `async function pageFunction(context) {
+          const { $, request } = context;
+          const results = [];
+          $('[class*="ProfileCard"], [class*="profile-card"], .seller-card').each((i, el) => {
+            const name = $(el).find('h2, h3, [class*="name"]').first().text().trim();
+            const phone = $(el).find('[href^="tel:"]').attr('href')?.replace('tel:', '') || null;
+            const location = $(el).find('[class*="location"], [class*="address"]').text().trim();
+            if (name && name.length > 2) results.push({ name, phone, address: location || null });
+          });
+          return results;
+        }`,
+        maxPagesPerCrawl: 1,
+      }),
+    });
+    if (!response.ok) return scrapeBarkFirecrawl(niche, location, country);
+    const rawData = await response.json();
+    const items = Array.isArray(rawData) ? rawData.flat().filter((i: unknown) => i && typeof i === 'object' && (i as Record<string, unknown>).name) : [];
+    if (items.length === 0) return scrapeBarkFirecrawl(niche, location, country);
+    return items.map((item: Record<string, unknown>) => ({
+      business_name: String(item.name), address: item.address ? String(item.address) : null,
+      city: location, country,
+      phone: item.phone ? String(item.phone) : null, email: null,
+      website: null, instagram_url: null,
+      google_rating: null, google_review_count: null, google_maps_url: null, source: 'bark',
+    }));
+  } catch { return scrapeBarkFirecrawl(niche, location, country); }
+}
+
+// Bark Firecrawl fallback
+async function scrapeBarkFirecrawl(niche: string, location: string, country: string): Promise<LeadResult[]> {
   const firecrawlKey = getKey('FIRECRAWL_API_KEY');
   if (!firecrawlKey) return [];
-
-  const searchUrl = `https://www.bark.com/find/${encodeURIComponent(niche.replace(/\s+/g, '-'))}--${encodeURIComponent(location.replace(/\s+/g, '-'))}`;
   try {
+    const nicheSlug = niche.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const locationSlug = location.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const countryPrefix = country === 'United Kingdom' ? 'gb' : country === 'United States' ? 'us' : 'gb';
+    const searchUrl = `https://www.bark.com/en/${countryPrefix}/find/${nicheSlug}/${locationSlug}/`;
+
     const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${firecrawlKey}` },
-      body: JSON.stringify({ url: searchUrl, formats: ['markdown'] }),
+      body: JSON.stringify({ url: searchUrl, formats: ['links', 'markdown'] }),
     });
     if (!response.ok) return [];
     const data = await response.json();
-    const markdown = data?.data?.markdown || '';
-    const businesses: Record<string, unknown>[] = [];
-    const lines = markdown.split('\n');
-    let currentBiz: Record<string, string | null> = {};
+    const md: string = data?.data?.markdown || '';
+    const results: LeadResult[] = [];
+    const lines = md.split('\n').filter(l => l.trim().length > 0);
 
-    for (const line of lines) {
-      if ((line.startsWith('###') || line.startsWith('##')) && !line.includes('Results') && !line.includes('Search')) {
-        if (currentBiz.business_name && currentBiz.business_name.length > 2) {
-          businesses.push({ ...currentBiz, source: 'bark' });
-        }
-        currentBiz = {
-          business_name: line.replace(/^#+\s*/, '').replace(/\[|\]/g, '').trim(),
-          address: null, phone: null, email: null, website: null, instagram_url: null,
-          google_rating: null, google_review_count: null, google_maps_url: null,
-          city: location, country,
-        };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const nameMatch = line.match(/\*\*([^*]+)\*\*/) || line.match(/^#{1,3}\s+(.+)/);
+      if (nameMatch) {
+        const name = (nameMatch[1] || '').replace(/\[|\]/g, '').trim();
+        if (name.length < 3 || name.length > 80) continue;
+        if (['Bark', 'Results', 'Search', 'Find', 'Professionals', 'Compare', 'Get', 'Top', 'How', 'Why'].some(skip => name.startsWith(skip))) continue;
+        const context = lines.slice(i, i + 6).join(' ');
+        const phoneRegex = /(\+?\d[\d\s()-]{9,})/;
+        const phoneMatch = context.match(phoneRegex);
+        results.push({
+          business_name: name, address: null, city: location, country,
+          phone: phoneMatch ? phoneMatch[1].trim() : null, email: null,
+          website: null, instagram_url: null,
+          google_rating: null, google_review_count: null, google_maps_url: null, source: 'bark',
+        });
       }
-      const phoneMatch = line.match(/(?:Tel|Phone|Call).*?(\+?[\d\s()-]{10,})/i);
-      if (phoneMatch && currentBiz.business_name) currentBiz.phone = phoneMatch[1].trim();
     }
-    if (currentBiz.business_name && currentBiz.business_name.length > 2) {
-      businesses.push({ ...currentBiz, source: 'bark' });
-    }
-    return businesses.filter(b => typeof b.business_name === 'string' && (b.business_name as string).length > 2).slice(0, 20);
-  } catch {
-    return [];
-  }
+    return results.slice(0, 20);
+  } catch { return []; }
 }
 
 // ─── MAIN HANDLER ──────────────────────────────────────────────
@@ -337,36 +468,40 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Niche and location are required' }, { status: 400 });
     }
 
-    let results: Record<string, unknown>[] = [];
+    let results: LeadResult[] = [];
     const errors: string[] = [];
+    const sourceStats: Record<string, number> = {};
 
-    const trySource = async (name: string, fn: () => Promise<Record<string, unknown>[]>) => {
+    const trySource = async (name: string, fn: () => Promise<LeadResult[]>) => {
       try {
         const r = await fn();
-        if (Array.isArray(r)) {
+        if (Array.isArray(r) && r.length > 0) {
           results = [...results, ...r];
+          sourceStats[name] = r.length;
+        } else {
+          sourceStats[name] = 0;
         }
       } catch (e: unknown) {
         const msg = e instanceof Error ? e.message : `${name} failed`;
         errors.push(msg);
+        sourceStats[name] = 0;
         if (source !== 'all') throw e;
       }
     };
 
-    if (source === 'google_maps' || source === 'all') await trySource('Google Maps', () => scrapeGoogleMaps(niche, location, country));
-    if (source === 'yelp' || source === 'all') await trySource('Yelp', () => scrapeYelp(niche, location, country));
-    if (source === 'fresha' || source === 'all') await trySource('Fresha', () => scrapeFresha(niche, location, country));
-    if (source === 'yell' || source === 'all') await trySource('Yell', () => scrapeYell(niche, location));
-    if (source === 'yellow_pages' || source === 'all') await trySource('Yellow Pages', () => scrapeYellowPages(niche, location));
-    if (source === 'bark' || source === 'all') await trySource('Bark', () => scrapeBark(niche, location, country));
+    if (source === 'google_maps' || source === 'all') await trySource('google_maps', () => scrapeGoogleMaps(niche, location, country));
+    if (source === 'yelp' || source === 'all') await trySource('yelp', () => scrapeYelp(niche, location, country));
+    if (source === 'fresha' || source === 'all') await trySource('fresha', () => scrapeFresha(niche, location, country));
+    if (source === 'yell' || source === 'all') await trySource('yell', () => scrapeYell(niche, location));
+    if (source === 'yellow_pages' || source === 'all') await trySource('yellow_pages', () => scrapeYellowPages(niche, location));
+    if (source === 'bark' || source === 'all') await trySource('bark', () => scrapeBark(niche, location, country));
 
     // De-duplicate by business name
     const seen = new Set<string>();
     const unique = results.filter(r => {
-      const name = r.business_name;
-      if (typeof name !== 'string') return false;
-      const key = name.toLowerCase().trim();
-      if (!key || seen.has(key)) return false;
+      if (!r.business_name || typeof r.business_name !== 'string') return false;
+      const key = r.business_name.toLowerCase().trim();
+      if (!key || key.length < 2 || seen.has(key)) return false;
       seen.add(key);
       return true;
     });
@@ -374,6 +509,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       results: unique,
       count: unique.length,
+      sourceStats,
       errors: errors.length > 0 ? errors : undefined,
     });
   } catch (err: unknown) {
