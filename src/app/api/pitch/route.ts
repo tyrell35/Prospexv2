@@ -24,7 +24,7 @@ function generateReviewsPitch(lead: Record<string, unknown>, audit: Record<strin
   const reviewsData = audit.reviews_data as Record<string, unknown> | null;
   const rating = reviewsData?.google_rating || lead.google_rating || 0;
   const count = reviewsData?.google_review_count || lead.google_review_count || 0;
-  const responseRate = reviewsData?.response_rate || 0;
+  const responseRate = (reviewsData?.response_rate as number) || 0;
   return {
     hook: `87% of consumers read Google reviews before choosing a local business. With ${count} reviews and a ${rating} rating, you're leaving money on the table.`,
     problem: `Your review count and rating are below where they need to be to consistently win new customers. ${responseRate < 50 ? `You're also only responding to ${responseRate}% of reviews, which signals to potential customers that you don't value feedback.` : ''}`,
