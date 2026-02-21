@@ -6,6 +6,7 @@ import {
   Building2, Globe2, ChevronDown, ChevronRight, Search, Database,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/lib/supabase';
 import { UK_AFFLUENT_CITIES, US_AFFLUENT_CITIES, CA_AFFLUENT_CITIES, getCitiesByRegion, getRegions } from '@/lib/affluent-cities';
 import type { CityData } from '@/lib/affluent-cities';
 
@@ -138,17 +139,35 @@ export default function CityScraper() {
         // Auto-save leads to Supabase with niche & country
         let savedCount = 0;
         if (foundLeads.length > 0) {
-          try {
-            const saveResponse = await fetch('/api/scrape', {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ leads: foundLeads, niche: niche.trim(), country: countryName }),
-            });
-            if (saveResponse.ok) {
-              const saveData = await saveResponse.json();
-              savedCount = saveData.saved || 0;
-            }
-          } catch { /* continue */ }
+          for (const lead of foundLeads) {
+            if (!lead.business_name) continue;
+            try {
+              const { data: existing } = await supabase
+                .from('leads')
+                .select('id')
+                .eq('business_name', lead.business_name)
+                .maybeSingle();
+              if (existing) continue;
+
+              const { error: insertErr } = await supabase.from('leads').insert({
+                business_name: lead.business_name,
+                niche: niche.trim() || null,
+                address: lead.address || null,
+                city: lead.city || citiesToScrape[i].name || null,
+                country: countryName || null,
+                phone: lead.phone || null,
+                email: lead.email || null,
+                website: lead.website || null,
+                instagram_url: lead.instagram_url || null,
+                google_rating: lead.google_rating || null,
+                google_review_count: lead.google_review_count || null,
+                source: lead.source || 'google_maps',
+                lead_priority: 'new',
+              });
+              if (!insertErr) savedCount++;
+              else console.error('Auto-save error:', insertErr.message);
+            } catch { /* continue */ }
+          }
         }
 
         // Log to scrape history
@@ -183,21 +202,52 @@ export default function CityScraper() {
   const stopScraping = () => { abortRef.current = true; setIsRunning(false); setIsPaused(false); };
 
   const saveAllToDatabase = async () => {
-    const allLeads = results.flatMap(r => r.leads);
+    const allLeads = results.flatMap(r => r.leads.map(l => ({ ...l, scraped_city: r.city.name })));
     if (allLeads.length === 0) return;
     setSavingAll(true);
-    try {
-      const resp = await fetch('/api/scrape', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ leads: allLeads, niche: niche.trim(), country: countryName }),
-      });
-      if (resp.ok) {
-        setSaveComplete(true);
-        setResults(prev => prev.map(r => ({ ...r, leadsSaved: r.leads.length })));
-      }
-    } catch (err) { console.error('Bulk save failed', err); }
-    finally { setSavingAll(false); }
+    let saved = 0;
+    let skipped = 0;
+    for (const lead of allLeads) {
+      if (!lead.business_name) continue;
+      try {
+        // Check duplicate
+        const { data: existing } = await supabase
+          .from('leads')
+          .select('id')
+          .eq('business_name', lead.business_name)
+          .maybeSingle();
+
+        if (existing) { skipped++; continue; }
+
+        const { error } = await supabase.from('leads').insert({
+          business_name: lead.business_name,
+          niche: niche.trim() || null,
+          address: lead.address || null,
+          city: lead.city || lead.scraped_city || null,
+          country: countryName || null,
+          phone: lead.phone || null,
+          email: lead.email || null,
+          website: lead.website || null,
+          instagram_url: lead.instagram_url || null,
+          google_rating: lead.google_rating || null,
+          google_review_count: lead.google_review_count || null,
+          source: lead.source || 'google_maps',
+          lead_priority: 'new',
+        });
+
+        if (error) {
+          console.error('Insert error:', error.message, error.details);
+        } else {
+          saved++;
+        }
+      } catch (err) { console.error('Save error:', err); }
+    }
+    console.log(`Save complete: ${saved} saved, ${skipped} skipped`);
+    if (saved > 0 || skipped > 0) {
+      setSaveComplete(true);
+      setResults(prev => prev.map(r => ({ ...r, leadsSaved: r.leads.length })));
+    }
+    setSavingAll(false);
   };
 
   const exportResults = () => {
