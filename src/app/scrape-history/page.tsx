@@ -130,6 +130,7 @@ export default function ScrapeHistoryPage() {
      address: lead.address,
      city: lead.city || session.location,
      country: session.country,
+     niche: session.niche || null,
      phone: lead.phone,
      email: lead.email,
      website: lead.website,
@@ -138,6 +139,7 @@ export default function ScrapeHistoryPage() {
      google_review_count: lead.google_review_count,
      google_maps_url: lead.google_maps_url,
      source: lead.source || session.source,
+     lead_priority: 'new',
     });
    }
 
