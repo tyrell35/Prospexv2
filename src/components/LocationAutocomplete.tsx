@@ -175,7 +175,7 @@ export default function LocationAutocomplete({
                 <MapPin className="w-4 h-4 text-cyan-400 mt-0.5 shrink-0" />
                 <div className="min-w-0">
                   <p className="text-sm text-prospex-text font-medium truncate">
-                    {suggestion.location_name || suggestion.name}
+                    {suggestion.location_name || suggestion.description}
                   </p>
                   <p className="text-[11px] text-prospex-dim truncate mt-0.5">
                     {suggestion.formatted_address || suggestion.description}
