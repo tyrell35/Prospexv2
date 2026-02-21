@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get details (lat/lng) for each prediction
-    const predictions = [];
+    const predictions: any[] = [];
 
     for (const pred of (acData.predictions || []).slice(0, 6)) {
       // Get place details for lat/lng
