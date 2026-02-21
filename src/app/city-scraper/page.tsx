@@ -162,7 +162,6 @@ export default function CityScraper() {
                 google_rating: lead.google_rating || null,
                 google_review_count: lead.google_review_count || null,
                 source: lead.source || 'google_maps',
-                lead_priority: 'new',
               });
               if (!insertErr) savedCount++;
               else console.error('Auto-save error:', insertErr.message);
@@ -181,7 +180,7 @@ export default function CityScraper() {
             source: 'google_maps', status: 'complete',
             total_found: foundLeads.length, total_saved: savedCount,
             error_message: null,
-            leads: foundLeads.map(l => ({ ...l, saved_to_db: true })),
+            leads: foundLeads.map(l => ({ ...l, saved_to_db: savedCount > 0 })),
           });
           localStorage.setItem('prospex_scrape_log', JSON.stringify(log.slice(0, 200)));
         } catch { /* silent */ }
@@ -232,7 +231,6 @@ export default function CityScraper() {
           google_rating: lead.google_rating || null,
           google_review_count: lead.google_review_count || null,
           source: lead.source || 'google_maps',
-          lead_priority: 'new',
         });
 
         if (error) {

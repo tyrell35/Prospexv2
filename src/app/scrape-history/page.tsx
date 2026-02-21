@@ -105,42 +105,43 @@ export default function ScrapeHistoryPage() {
   const key = `${session.scrape_id}-${index}`;
   setSavingLeads(prev => new Set(prev).add(key));
   try {
+   // Check duplicate by name only (more reliable)
    const { data: existing } = await supabase
     .from('leads')
     .select('id')
     .eq('business_name', lead.business_name)
-    .eq('city', lead.city || session.location)
     .maybeSingle();
 
    if (existing) {
-    // Update existing
-    await supabase.from('leads').update({
-     phone: lead.phone || undefined,
-     email: lead.email || undefined,
-     website: lead.website || undefined,
-     instagram_url: lead.instagram_url || undefined,
-     google_rating: lead.google_rating || undefined,
-     google_review_count: lead.google_review_count || undefined,
-     updated_at: new Date().toISOString(),
-    }).eq('id', existing.id);
-   } else {
-    // Insert new
-    await supabase.from('leads').insert({
-     business_name: lead.business_name,
-     address: lead.address,
-     city: lead.city || session.location,
-     country: session.country,
-     niche: session.niche || null,
-     phone: lead.phone,
-     email: lead.email,
-     website: lead.website,
-     instagram_url: lead.instagram_url,
-     google_rating: lead.google_rating,
-     google_review_count: lead.google_review_count,
-     google_maps_url: lead.google_maps_url,
-     source: lead.source || session.source,
-     lead_priority: 'new',
-    });
+    // Already exists — mark as saved
+    lead.saved_to_db = true;
+    session.total_saved = session.leads.filter(l => l.saved_to_db).length;
+    const updated = sessions.map(s => s.scrape_id === session.scrape_id ? { ...session } : s);
+    setSessions(updated);
+    saveLog(updated);
+    setSavedLeads(prev => new Set(prev).add(key));
+    return;
+   }
+
+   // Insert new
+   const { error: insertError } = await supabase.from('leads').insert({
+    business_name: lead.business_name,
+    address: lead.address || null,
+    city: lead.city || session.location || null,
+    country: session.country || null,
+    niche: session.niche || null,
+    phone: lead.phone || null,
+    email: lead.email || null,
+    website: lead.website || null,
+    instagram_url: lead.instagram_url || null,
+    google_rating: lead.google_rating || null,
+    google_review_count: lead.google_review_count || null,
+    source: lead.source || session.source || 'google_maps',
+   });
+
+   if (insertError) {
+    console.error('Supabase insert error:', insertError.message, insertError.details, insertError.hint);
+    return;
    }
 
    // Mark as saved in log
@@ -160,10 +161,8 @@ export default function ScrapeHistoryPage() {
  // Save all unsaved leads from a session
  const saveAllFromSession = async (session: ScrapeSession) => {
   setBulkSaving(true);
-  const unsaved = session.leads.filter(l => !l.saved_to_db);
-  for (let i = 0; i < unsaved.length; i++) {
-   const originalIndex = session.leads.indexOf(unsaved[i]);
-   await saveLead(session, unsaved[i], originalIndex);
+  for (let i = 0; i < session.leads.length; i++) {
+   await saveLead(session, session.leads[i], i);
   }
   setBulkSaving(false);
  };
@@ -322,12 +321,10 @@ export default function ScrapeHistoryPage() {
           {/* Session Actions */}
           <div className="flex items-center justify-between px-4 py-2.5 bg-prospex-bg/30 border-b border-prospex-border/50">
            <div className="flex items-center gap-2">
-            {unsavedCount > 0 && (
              <button onClick={() => saveAllFromSession(session)} disabled={bulkSaving} className="flex items-center gap-1.5 px-3 py-1.5 bg-prospex-cyan text-white font-semibold text-xs rounded-lg hover:bg-prospex-cyan/80 disabled:opacity-50">
-              {bulkSaving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-              Save All Unsaved ({unsavedCount})
+              {bulkSaving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
+              Push All to DB ({session.leads.length})
              </button>
-            )}
             <button onClick={() => exportCSV(session)} className="flex items-center gap-1.5 px-3 py-1.5 bg-prospex-bg border border-prospex-border text-xs text-white rounded-lg hover:border-prospex-cyan/40">
              <Download className="w-3 h-3" /> Export CSV
             </button>
