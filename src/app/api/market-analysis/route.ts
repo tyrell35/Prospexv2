@@ -45,6 +45,22 @@ interface MarketAnalysis {
   pitch_angles: { angle: string; target_count: number; description: string }[];
 }
 
+// Quick Meta Ad Library check
+async function checkMetaAds(businessName: string): Promise<boolean> {
+  const metaToken = process.env.META_AD_LIBRARY_TOKEN;
+  if (!metaToken) return false;
+  try {
+    const searchTerm = encodeURIComponent(businessName);
+    const url = `https://graph.facebook.com/v21.0/ads_archive?search_terms=${searchTerm}&ad_reached_countries=["GB","US","CA"]&ad_active_status=ACTIVE&fields=id&limit=1&access_token=${metaToken}`;
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return false;
+    const data = await resp.json();
+    return (data?.data?.length || 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
 // Quick website check using Firecrawl
 async function quickWebsiteAudit(website: string): Promise<{
   score: number; ssl: boolean; booking: boolean; social: boolean;
@@ -169,7 +185,7 @@ export async function POST(request: NextRequest) {
           audit = await quickWebsiteAudit(website);
         }
 
-        // Determine ad activity
+        // Determine ad activity — check Meta Ad Library + pixels
         let adActivity: 'active' | 'pixel_only' | 'none' | 'unknown' = 'unknown';
         if (lead.ad_detection_data) {
           const adData = lead.ad_detection_data as Record<string, unknown>;
@@ -178,10 +194,17 @@ export async function POST(request: NextRequest) {
           if (gAds?.detected || fAds?.detected) adActivity = 'active';
           else if (audit.adPixels) adActivity = 'pixel_only';
           else adActivity = 'none';
-        } else if (audit.adPixels) {
-          adActivity = 'pixel_only';
-        } else if (website) {
-          adActivity = 'none';
+        } else {
+          // Check Meta Ad Library for active ads
+          const hasMetaAds = await checkMetaAds(lead.business_name as string);
+          if (hasMetaAds) {
+            adActivity = 'active';
+          } else if (audit.adPixels) {
+            // Has Google Ads conversion tag or FB pixel = likely running ads
+            adActivity = 'pixel_only';
+          } else if (website) {
+            adActivity = 'none';
+          }
         }
 
         // Identify strengths and weaknesses
@@ -213,10 +236,13 @@ export async function POST(request: NextRequest) {
           id: lead.id as string | undefined,
           business_name: lead.business_name as string,
           website,
+          address: (lead.address as string) || null,
+          city: (lead.city as string) || null,
+          phone: (lead.phone as string) || null,
+          email: (lead.email as string) || null,
+          instagram_url: (lead.instagram_url as string) || null,
           google_rating: rating,
           google_review_count: reviews,
-          phone: lead.phone as string | null,
-          email: lead.email as string | null,
           has_website: !!website,
           website_score: website ? audit.score : null,
           has_ssl: audit.ssl,
