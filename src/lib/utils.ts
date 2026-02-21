@@ -97,3 +97,5 @@ export const PIPELINE_STAGES = [
   { id: 'closed', label: 'Closed Won', color: 'bg-green-500/20 text-green-400 border-green-500/40' },
   { id: 'lost', label: 'Lost', color: 'bg-red-500/20 text-red-400 border-red-500/40' },
 ];
+
+export const getScoreBgColor = getScoreBg;
