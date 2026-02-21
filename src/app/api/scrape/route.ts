@@ -760,7 +760,7 @@ export async function PUT(request: NextRequest) {
         google_review_count: lead.google_review_count || null,
         instagram_url: lead.instagram_url || null,
         source: lead.source || 'google_maps',
-        priority: 'new',
+        lead_priority: 'new',
       });
 
       if (!error) saved++;
