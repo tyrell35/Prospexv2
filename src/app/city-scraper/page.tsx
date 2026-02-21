@@ -6,7 +6,7 @@ import {
   Building2, Globe2, ChevronDown, ChevronRight, Search, Database,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { UK_AFFLUENT_CITIES, US_AFFLUENT_CITIES, getCitiesByRegion, getRegions } from '@/lib/affluent-cities';
+import { UK_AFFLUENT_CITIES, US_AFFLUENT_CITIES, CA_AFFLUENT_CITIES, getCitiesByRegion, getRegions } from '@/lib/affluent-cities';
 import type { CityData } from '@/lib/affluent-cities';
 
 interface LeadResult {
@@ -34,7 +34,7 @@ interface CityResult {
 }
 
 export default function CityScraper() {
-  const [country, setCountry] = useState<'uk' | 'us'>('uk');
+  const [country, setCountry] = useState<'uk' | 'us' | 'ca'>('uk');
   const [niche, setNiche] = useState('');
   const [selectedRegions, setSelectedRegions] = useState<Set<string>>(new Set());
   const [selectedCities, setSelectedCities] = useState<Set<string>>(new Set());
@@ -50,8 +50,8 @@ export default function CityScraper() {
   const abortRef = useRef(false);
   const pauseRef = useRef(false);
 
-  const cities = country === 'uk' ? UK_AFFLUENT_CITIES : US_AFFLUENT_CITIES;
-  const countryName = country === 'uk' ? 'United Kingdom' : 'United States';
+  const cities = country === 'uk' ? UK_AFFLUENT_CITIES : country === 'us' ? US_AFFLUENT_CITIES : CA_AFFLUENT_CITIES;
+  const countryName = country === 'uk' ? 'United Kingdom' : country === 'us' ? 'United States' : 'Canada';
   const regions = getRegions(cities);
   const citiesByRegion = getCitiesByRegion(cities);
 
@@ -223,7 +223,7 @@ export default function CityScraper() {
             <h1 className="text-2xl font-mono font-bold text-prospex-text flex items-center gap-3">
               <MapPin className="w-6 h-6 text-violet-400" /> City Scraper
             </h1>
-            <p className="text-sm text-prospex-dim mt-1">Bulk scrape leads from affluent cities — all results auto-save to your lead database</p>
+            <p className="text-sm text-prospex-dim mt-1">Bulk scrape leads from affluent cities in UK, US &amp; Canada — all results auto-save to your lead database</p>
           </div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -234,11 +234,11 @@ export default function CityScraper() {
           <div>
             <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">Country</label>
             <div className="flex gap-2">
-              {(['uk', 'us'] as const).map(c => (
-                <button key={c} onClick={() => { setCountry(c); clearAll(); }} disabled={isRunning}
+              {([['uk', '🇬🇧 UK'], ['us', '🇺🇸 US'], ['ca', '🇨🇦 CA']] as const).map(([c, label]) => (
+                <button key={c} onClick={() => { setCountry(c as 'uk' | 'us' | 'ca'); clearAll(); }} disabled={isRunning}
                   className={cn('flex-1 py-2 rounded-lg text-sm font-medium border transition-all',
                     country === c ? 'bg-prospex-cyan/20 border-prospex-cyan/40 text-prospex-cyan' : 'bg-prospex-surface border-prospex-border text-prospex-muted')}>
-                  {c === 'uk' ? '🇬🇧 UK' : '🇺🇸 US'}
+                  {label}
                 </button>
               ))}
             </div>

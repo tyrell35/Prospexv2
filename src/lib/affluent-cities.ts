@@ -1,10 +1,10 @@
 // Top affluent cities/areas for prospecting high-end service businesses
-// UK: 100 cities | US: 200 cities (most affluent metro areas by median household income)
+// UK: 100 cities | US: 200 cities | Canada: 85 cities (most affluent metro areas)
 
 export interface CityData {
   name: string;
   region: string;
-  country: 'United Kingdom' | 'United States';
+  country: 'United Kingdom' | 'United States' | 'Canada';
 }
 
 export const UK_AFFLUENT_CITIES: CityData[] = [
@@ -310,6 +310,96 @@ export const US_AFFLUENT_CITIES: CityData[] = [
   { name: 'Allen', region: 'Texas', country: 'United States' },
   { name: 'San Antonio', region: 'Texas', country: 'United States' },
   { name: 'Dallas', region: 'Texas', country: 'United States' },
+];
+
+export const CA_AFFLUENT_CITIES: CityData[] = [
+  // Ontario — Greater Toronto Area
+  { name: 'Yorkville', region: 'Ontario', country: 'Canada' },
+  { name: 'Forest Hill', region: 'Ontario', country: 'Canada' },
+  { name: 'Rosedale', region: 'Ontario', country: 'Canada' },
+  { name: 'The Bridle Path', region: 'Ontario', country: 'Canada' },
+  { name: 'Lawrence Park', region: 'Ontario', country: 'Canada' },
+  { name: 'King City', region: 'Ontario', country: 'Canada' },
+  { name: 'Oakville', region: 'Ontario', country: 'Canada' },
+  { name: 'Burlington', region: 'Ontario', country: 'Canada' },
+  { name: 'Mississauga', region: 'Ontario', country: 'Canada' },
+  { name: 'Richmond Hill', region: 'Ontario', country: 'Canada' },
+  { name: 'Markham', region: 'Ontario', country: 'Canada' },
+  { name: 'Vaughan', region: 'Ontario', country: 'Canada' },
+  { name: 'Aurora', region: 'Ontario', country: 'Canada' },
+  { name: 'Newmarket', region: 'Ontario', country: 'Canada' },
+  { name: 'Whitby', region: 'Ontario', country: 'Canada' },
+  { name: 'Toronto', region: 'Ontario', country: 'Canada' },
+  { name: 'Etobicoke', region: 'Ontario', country: 'Canada' },
+  { name: 'North York', region: 'Ontario', country: 'Canada' },
+  { name: 'Scarborough', region: 'Ontario', country: 'Canada' },
+  // Ontario — Other
+  { name: 'Ottawa', region: 'Ontario', country: 'Canada' },
+  { name: 'Rockcliffe Park', region: 'Ontario', country: 'Canada' },
+  { name: 'Westboro', region: 'Ontario', country: 'Canada' },
+  { name: 'Niagara-on-the-Lake', region: 'Ontario', country: 'Canada' },
+  { name: 'Waterloo', region: 'Ontario', country: 'Canada' },
+  { name: 'Kitchener', region: 'Ontario', country: 'Canada' },
+  { name: 'London', region: 'Ontario', country: 'Canada' },
+  { name: 'Hamilton', region: 'Ontario', country: 'Canada' },
+  { name: 'Kingston', region: 'Ontario', country: 'Canada' },
+  { name: 'Collingwood', region: 'Ontario', country: 'Canada' },
+  { name: 'Muskoka', region: 'Ontario', country: 'Canada' },
+  // British Columbia — Greater Vancouver
+  { name: 'West Vancouver', region: 'British Columbia', country: 'Canada' },
+  { name: 'North Vancouver', region: 'British Columbia', country: 'Canada' },
+  { name: 'Shaughnessy', region: 'British Columbia', country: 'Canada' },
+  { name: 'Kerrisdale', region: 'British Columbia', country: 'Canada' },
+  { name: 'Point Grey', region: 'British Columbia', country: 'Canada' },
+  { name: 'Kitsilano', region: 'British Columbia', country: 'Canada' },
+  { name: 'Yaletown', region: 'British Columbia', country: 'Canada' },
+  { name: 'Vancouver', region: 'British Columbia', country: 'Canada' },
+  { name: 'Burnaby', region: 'British Columbia', country: 'Canada' },
+  { name: 'Richmond', region: 'British Columbia', country: 'Canada' },
+  { name: 'Surrey', region: 'British Columbia', country: 'Canada' },
+  { name: 'White Rock', region: 'British Columbia', country: 'Canada' },
+  { name: 'Langley', region: 'British Columbia', country: 'Canada' },
+  { name: 'Coquitlam', region: 'British Columbia', country: 'Canada' },
+  // British Columbia — Other
+  { name: 'Victoria', region: 'British Columbia', country: 'Canada' },
+  { name: 'Oak Bay', region: 'British Columbia', country: 'Canada' },
+  { name: 'Kelowna', region: 'British Columbia', country: 'Canada' },
+  { name: 'Whistler', region: 'British Columbia', country: 'Canada' },
+  { name: 'Kamloops', region: 'British Columbia', country: 'Canada' },
+  { name: 'Nanaimo', region: 'British Columbia', country: 'Canada' },
+  // Alberta
+  { name: 'Calgary', region: 'Alberta', country: 'Canada' },
+  { name: 'Mount Royal', region: 'Alberta', country: 'Canada' },
+  { name: 'Elbow Park', region: 'Alberta', country: 'Canada' },
+  { name: 'Aspen Woods', region: 'Alberta', country: 'Canada' },
+  { name: 'Springbank', region: 'Alberta', country: 'Canada' },
+  { name: 'Canmore', region: 'Alberta', country: 'Canada' },
+  { name: 'Edmonton', region: 'Alberta', country: 'Canada' },
+  { name: 'Windermere', region: 'Alberta', country: 'Canada' },
+  { name: 'St Albert', region: 'Alberta', country: 'Canada' },
+  { name: 'Sherwood Park', region: 'Alberta', country: 'Canada' },
+  // Quebec
+  { name: 'Westmount', region: 'Quebec', country: 'Canada' },
+  { name: 'Outremont', region: 'Quebec', country: 'Canada' },
+  { name: 'Mont-Royal', region: 'Quebec', country: 'Canada' },
+  { name: 'Montreal', region: 'Quebec', country: 'Canada' },
+  { name: 'Laval', region: 'Quebec', country: 'Canada' },
+  { name: 'Brossard', region: 'Quebec', country: 'Canada' },
+  { name: 'Longueuil', region: 'Quebec', country: 'Canada' },
+  { name: 'Quebec City', region: 'Quebec', country: 'Canada' },
+  { name: 'Sillery', region: 'Quebec', country: 'Canada' },
+  { name: 'Tremblant', region: 'Quebec', country: 'Canada' },
+  // Manitoba
+  { name: 'Winnipeg', region: 'Manitoba', country: 'Canada' },
+  { name: 'Tuxedo', region: 'Manitoba', country: 'Canada' },
+  // Saskatchewan
+  { name: 'Saskatoon', region: 'Saskatchewan', country: 'Canada' },
+  { name: 'Regina', region: 'Saskatchewan', country: 'Canada' },
+  // Atlantic
+  { name: 'Halifax', region: 'Nova Scotia', country: 'Canada' },
+  { name: 'Fredericton', region: 'New Brunswick', country: 'Canada' },
+  { name: 'St Johns', region: 'Newfoundland', country: 'Canada' },
+  { name: 'Charlottetown', region: 'Prince Edward Island', country: 'Canada' },
 ];
 
 // Group by region for UI display
