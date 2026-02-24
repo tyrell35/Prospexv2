@@ -1,11 +1,26 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { History, Search, Download, Database, ChevronDown, ChevronUp, Check, Clock, AlertCircle, Trash2, RefreshCw, Filter, ExternalLink, Upload } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { History, Search, Download, Database, ChevronDown, ChevronUp, Check, Clock, AlertCircle, Trash2, RefreshCw, Filter, Save, ExternalLink, MessageCircle, Instagram } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn, formatRelativeTime } from '@/lib/utils';
 
 // ─── TYPES ──────────────────────────────────────────────────
+interface ScrapeLogEntry {
+ id: string;
+ scrape_id: string;
+ created_at: string;
+ niche: string;
+ location: string;
+ country: string;
+ source: string;
+ status: 'started' | 'partial' | 'complete' | 'error';
+ total_found: number;
+ total_saved: number;
+ error_message: string | null;
+ leads: ScrapeLogLead[];
+}
+
 interface ScrapeLogLead {
  business_name: string;
  address: string | null;
@@ -22,7 +37,6 @@ interface ScrapeLogLead {
 }
 
 interface ScrapeSession {
- id?: string;
  scrape_id: string;
  created_at: string;
  niche: string;
@@ -38,6 +52,21 @@ interface ScrapeSession {
 
 const LS_KEY = 'prospex_scrape_log';
 
+// ─── HELPERS ────────────────────────────────────────────────
+function getStoredLog(): ScrapeSession[] {
+ try {
+  const raw = localStorage.getItem(LS_KEY);
+  if (!raw) return [];
+  return JSON.parse(raw);
+ } catch { return []; }
+}
+
+function saveLog(sessions: ScrapeSession[]) {
+ // Keep last 100 sessions max
+ const trimmed = sessions.slice(0, 100);
+ localStorage.setItem(LS_KEY, JSON.stringify(trimmed));
+}
+
 // ─── MAIN PAGE ──────────────────────────────────────────────
 export default function ScrapeHistoryPage() {
  const [sessions, setSessions] = useState<ScrapeSession[]>([]);
@@ -47,119 +76,18 @@ export default function ScrapeHistoryPage() {
  const [savingLeads, setSavingLeads] = useState<Set<string>>(new Set());
  const [savedLeads, setSavedLeads] = useState<Set<string>>(new Set());
  const [bulkSaving, setBulkSaving] = useState(false);
- const [loading, setLoading] = useState(true);
- const [migrating, setMigrating] = useState(false);
 
- // Load from Supabase + migrate localStorage
+ // Load from localStorage
  useEffect(() => {
-  loadSessions();
+  const stored = getStoredLog();
+  setSessions(stored);
  }, []);
-
- const loadSessions = async () => {
-  setLoading(true);
-  try {
-   // Load from Supabase
-   const { data: dbSessions, error } = await supabase
-    .from('scrape_sessions')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(500);
-
-   if (error) {
-    console.error('Failed to load from Supabase:', error.message);
-    // Fall back to localStorage
-    const local = getLocalSessions();
-    setSessions(local);
-    setLoading(false);
-    return;
-   }
-
-   const supabaseSessions: ScrapeSession[] = (dbSessions || []).map((s: any) => ({
-    id: s.id,
-    scrape_id: s.scrape_id,
-    created_at: s.created_at,
-    niche: s.niche || '',
-    location: s.location || '',
-    country: s.country || '',
-    source: s.source || 'google_maps',
-    status: s.status || 'complete',
-    total_found: s.total_found || 0,
-    total_saved: s.total_saved || 0,
-    error_message: s.error_message,
-    leads: Array.isArray(s.leads) ? s.leads : [],
-   }));
-
-   // Also check localStorage for any sessions not yet in Supabase
-   const local = getLocalSessions();
-   const dbIds = new Set(supabaseSessions.map(s => s.scrape_id));
-   const localOnly = local.filter(s => !dbIds.has(s.scrape_id));
-
-   // Auto-migrate local-only sessions to Supabase in background
-   if (localOnly.length > 0) {
-    migrateToSupabase(localOnly);
-   }
-
-   // Merge: Supabase sessions + local-only sessions
-   const merged = [...supabaseSessions, ...localOnly].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-   );
-
-   setSessions(merged);
-  } catch (err) {
-   console.error('Load error:', err);
-   setSessions(getLocalSessions());
-  }
-  setLoading(false);
- };
-
- const getLocalSessions = (): ScrapeSession[] => {
-  try {
-   const raw = localStorage.getItem(LS_KEY);
-   if (!raw) return [];
-   return JSON.parse(raw);
-  } catch { return []; }
- };
-
- const migrateToSupabase = async (localSessions: ScrapeSession[]) => {
-  setMigrating(true);
-  let migrated = 0;
-  for (const session of localSessions) {
-   try {
-    const { error } = await supabase.from('scrape_sessions').insert({
-     scrape_id: session.scrape_id,
-     created_at: session.created_at,
-     niche: session.niche,
-     location: session.location,
-     country: session.country,
-     source: session.source,
-     status: session.status,
-     total_found: session.total_found,
-     total_saved: session.total_saved,
-     error_message: session.error_message,
-     leads: session.leads,
-    });
-    if (!error) migrated++;
-   } catch { /* skip duplicates */ }
-  }
-  if (migrated > 0) {
-   console.log(`Migrated ${migrated} sessions from localStorage to Supabase`);
-  }
-  setMigrating(false);
- };
-
- // Force migrate button
- const forceMigrate = async () => {
-  const local = getLocalSessions();
-  if (local.length === 0) { alert('No localStorage sessions to migrate.'); return; }
-  await migrateToSupabase(local);
-  await loadSessions();
- };
 
  // Filter sessions
  const filtered = sessions.filter(s => {
   if (searchQuery) {
    const q = searchQuery.toLowerCase();
-   if (!(s.niche || '').toLowerCase().includes(q) && !(s.location || '').toLowerCase().includes(q) && !(s.country || '').toLowerCase().includes(q)) return false;
+   if (!s.niche.toLowerCase().includes(q) && !s.location.toLowerCase().includes(q) && !s.country.toLowerCase().includes(q)) return false;
   }
   if (statusFilter !== 'all' && s.status !== statusFilter) return false;
   return true;
@@ -167,12 +95,12 @@ export default function ScrapeHistoryPage() {
 
  // Stats
  const totalScrapes = sessions.length;
- const totalLeadsFound = sessions.reduce((sum, s) => sum + (s.total_found || s.leads.length), 0);
+ const totalLeadsFound = sessions.reduce((sum, s) => sum + s.total_found, 0);
  const totalLeadsSaved = sessions.reduce((sum, s) => sum + s.total_saved, 0);
  const unsavedLeads = totalLeadsFound - totalLeadsSaved;
  const errorScrapes = sessions.filter(s => s.status === 'error').length;
 
- // Save individual lead to leads table
+ // Save individual lead to database
  const saveLead = async (session: ScrapeSession, lead: ScrapeLogLead, index: number) => {
   const key = `${session.scrape_id}-${index}`;
   setSavingLeads(prev => new Set(prev).add(key));
@@ -181,69 +109,66 @@ export default function ScrapeHistoryPage() {
     .from('leads')
     .select('id')
     .eq('business_name', lead.business_name)
+    .eq('city', lead.city || session.location)
     .maybeSingle();
 
    if (existing) {
-    lead.saved_to_db = true;
-    updateSessionInState(session);
-    setSavedLeads(prev => new Set(prev).add(key));
-    return;
+    // Update existing
+    await supabase.from('leads').update({
+     phone: lead.phone || undefined,
+     email: lead.email || undefined,
+     website: lead.website || undefined,
+     instagram_url: lead.instagram_url || undefined,
+     google_rating: lead.google_rating || undefined,
+     google_review_count: lead.google_review_count || undefined,
+     updated_at: new Date().toISOString(),
+    }).eq('id', existing.id);
+   } else {
+    // Insert new
+    await supabase.from('leads').insert({
+     business_name: lead.business_name,
+     address: lead.address,
+     city: lead.city || session.location,
+     country: session.country,
+     niche: session.niche || null,
+     phone: lead.phone,
+     email: lead.email,
+     website: lead.website,
+     instagram_url: lead.instagram_url,
+     google_rating: lead.google_rating,
+     google_review_count: lead.google_review_count,
+     google_maps_url: lead.google_maps_url,
+     source: lead.source || session.source,
+     lead_priority: 'new',
+    });
    }
 
-   const { error: insertError } = await supabase.from('leads').insert({
-    business_name: lead.business_name,
-    address: lead.address || null,
-    city: lead.city || session.location || null,
-    country: session.country || null,
-    niche: session.niche || null,
-    phone: lead.phone || null,
-    email: lead.email || null,
-    website: lead.website || null,
-    instagram_url: lead.instagram_url || null,
-    google_rating: lead.google_rating || null,
-    google_review_count: lead.google_review_count || null,
-    source: lead.source || session.source || 'google_maps',
-   });
-
-   if (insertError) {
-    console.error('Insert error:', insertError.message, insertError.details);
-    return;
-   }
-
+   // Mark as saved in log
    lead.saved_to_db = true;
-   updateSessionInState(session);
+   session.total_saved = session.leads.filter(l => l.saved_to_db).length;
+   const updated = sessions.map(s => s.scrape_id === session.scrape_id ? { ...session } : s);
+   setSessions(updated);
+   saveLog(updated);
    setSavedLeads(prev => new Set(prev).add(key));
   } catch (err) {
-   console.error('Save error:', err);
+   console.error('Failed to save lead:', err);
   } finally {
    setSavingLeads(prev => { const next = new Set(prev); next.delete(key); return next; });
   }
  };
 
- const updateSessionInState = (session: ScrapeSession) => {
-  session.total_saved = session.leads.filter(l => l.saved_to_db).length;
-  const updated = sessions.map(s => s.scrape_id === session.scrape_id ? { ...session } : s);
-  setSessions(updated);
-  // Also update in Supabase
-  supabase.from('scrape_sessions')
-   .update({ leads: session.leads, total_saved: session.total_saved })
-   .eq('scrape_id', session.scrape_id)
-   .then(() => {});
-  // Update localStorage too
-  try {
-   const local = getLocalSessions().map(s => s.scrape_id === session.scrape_id ? { ...session } : s);
-   localStorage.setItem(LS_KEY, JSON.stringify(local.slice(0, 100)));
-  } catch { /* silent */ }
- };
-
+ // Save all unsaved leads from a session
  const saveAllFromSession = async (session: ScrapeSession) => {
   setBulkSaving(true);
-  for (let i = 0; i < session.leads.length; i++) {
-   await saveLead(session, session.leads[i], i);
+  const unsaved = session.leads.filter(l => !l.saved_to_db);
+  for (let i = 0; i < unsaved.length; i++) {
+   const originalIndex = session.leads.indexOf(unsaved[i]);
+   await saveLead(session, unsaved[i], originalIndex);
   }
   setBulkSaving(false);
  };
 
+ // Export session leads as CSV
  const exportCSV = (session: ScrapeSession) => {
   const headers = ['Business Name', 'Address', 'City', 'Phone', 'Email', 'Website', 'Instagram', 'Rating', 'Reviews', 'Source', 'Saved to DB'];
   const rows = session.leads.map(l => [
@@ -251,7 +176,7 @@ export default function ScrapeHistoryPage() {
    l.website || '', l.instagram_url || '', l.google_rating?.toString() || '', l.google_review_count?.toString() || '',
    l.source, l.saved_to_db ? 'Yes' : 'No'
   ]);
-  const csv = [headers.join(','), ...rows.map(r => r.map(v => `"${(v || '').replace(/"/g, '""')}"`).join(','))].join('\n');
+  const csv = [headers.join(','), ...rows.map(r => r.map(v => `"${v.replace(/"/g, '""')}"`).join(','))].join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -261,24 +186,19 @@ export default function ScrapeHistoryPage() {
   URL.revokeObjectURL(url);
  };
 
- const deleteSession = async (scrapeId: string) => {
-  if (!confirm('Delete this scrape log? Leads already saved to your database will remain.')) return;
-  // Delete from Supabase
-  await supabase.from('scrape_sessions').delete().eq('scrape_id', scrapeId);
-  // Delete from localStorage
-  try {
-   const local = getLocalSessions().filter(s => s.scrape_id !== scrapeId);
-   localStorage.setItem(LS_KEY, JSON.stringify(local));
-  } catch { /* silent */ }
-  setSessions(prev => prev.filter(s => s.scrape_id !== scrapeId));
+ // Delete a session
+ const deleteSession = (scrapeId: string) => {
+  if (!confirm('Delete this scrape log? The leads already saved to your database will remain.')) return;
+  const updated = sessions.filter(s => s.scrape_id !== scrapeId);
+  setSessions(updated);
+  saveLog(updated);
  };
 
- const clearAll = async () => {
+ // Clear all logs
+ const clearAll = () => {
   if (!confirm('Clear ALL scrape history logs? Leads already saved to your database will remain.')) return;
-  // Delete all from Supabase
-  await supabase.from('scrape_sessions').delete().neq('scrape_id', '');
-  localStorage.removeItem(LS_KEY);
   setSessions([]);
+  saveLog([]);
  };
 
  return (
@@ -290,17 +210,9 @@ export default function ScrapeHistoryPage() {
       <History className="w-6 h-6 text-prospex-cyan" />
       Scrape History & Lead Log
      </h1>
-     <p className="text-sm text-prospex-muted mt-1">
-      Every lead from every scrape — stored permanently in your database.
-      {migrating && <span className="text-prospex-cyan ml-2">Migrating old data...</span>}
-     </p>
+     <p className="text-sm text-prospex-muted mt-1">Every lead from every scrape is automatically logged here — nothing gets lost.</p>
     </div>
-    <div className="flex items-center gap-2">
-     <button onClick={forceMigrate} className="text-xs text-prospex-muted hover:text-prospex-cyan transition-colors flex items-center gap-1" title="Migrate localStorage sessions to Supabase">
-      <Upload className="w-3 h-3" /> Migrate Local
-     </button>
-     <button onClick={clearAll} className="text-xs text-prospex-muted hover:text-red-400 transition-colors">Clear All</button>
-    </div>
+    <button onClick={clearAll} className="text-xs text-prospex-muted hover:text-red-400 transition-colors">Clear All Logs</button>
    </div>
 
    {/* Stats */}
@@ -319,12 +231,27 @@ export default function ScrapeHistoryPage() {
     ))}
    </div>
 
+   {/* Unsaved Leads Alert */}
+   {unsavedLeads > 0 && (
+    <div className="mb-6 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg flex items-center justify-between">
+     <div className="flex items-center gap-2">
+      <AlertCircle className="w-4 h-4 text-amber-400" />
+      <span className="text-sm text-amber-300">You have <strong>{unsavedLeads}</strong> leads from past scrapes that haven't been saved to your database yet.</span>
+     </div>
+    </div>
+   )}
+
    {/* Filters */}
    <div className="flex items-center gap-3 mb-4">
     <div className="relative flex-1">
      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-prospex-muted" />
-     <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search by niche, location, or country..."
-      className="w-full pl-10 pr-4 py-2 bg-prospex-surface border border-prospex-border rounded-lg text-sm text-white placeholder:text-prospex-muted focus:outline-none focus:border-prospex-cyan" />
+     <input
+      type="text"
+      value={searchQuery}
+      onChange={e => setSearchQuery(e.target.value)}
+      placeholder="Search by niche, location, or country..."
+      className="w-full pl-10 pr-4 py-2 bg-prospex-surface border border-prospex-border rounded-lg text-sm text-white placeholder:text-prospex-muted focus:outline-none focus:border-prospex-cyan"
+     />
     </div>
     <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="bg-prospex-surface border border-prospex-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-prospex-cyan">
      <option value="all">All Status</option>
@@ -332,30 +259,20 @@ export default function ScrapeHistoryPage() {
      <option value="partial">Partial</option>
      <option value="error">Error</option>
     </select>
-    <button onClick={loadSessions} className="btn-ghost text-xs flex items-center gap-1">
-     <RefreshCw className="w-3 h-3" /> Refresh
-    </button>
    </div>
 
-   {/* Loading */}
-   {loading && (
-    <div className="text-center py-12">
-     <RefreshCw className="w-8 h-8 text-prospex-cyan animate-spin mx-auto mb-3" />
-     <p className="text-sm text-prospex-muted">Loading scrape history...</p>
-    </div>
-   )}
-
    {/* Sessions List */}
-   {!loading && filtered.length === 0 ? (
+   {filtered.length === 0 ? (
     <div className="bg-prospex-surface border border-prospex-border rounded-lg p-12 text-center">
      <History className="w-12 h-12 text-prospex-dim mx-auto mb-3" />
      <p className="text-sm text-prospex-muted">
       {sessions.length === 0
        ? 'No scrape history yet. Run a search and all results will be automatically logged here.'
-       : 'No scrapes match your filter.'}
+       : 'No scrapes match your filter.'
+      }
      </p>
     </div>
-   ) : !loading && (
+   ) : (
     <div className="space-y-3">
      {filtered.map(session => {
       const isExpanded = expandedSession === session.scrape_id;
@@ -367,43 +284,50 @@ export default function ScrapeHistoryPage() {
 
       return (
        <div key={session.scrape_id} className="bg-prospex-surface border border-prospex-border rounded-lg overflow-hidden">
+        {/* Session Header */}
         <button onClick={() => setExpandedSession(isExpanded ? null : session.scrape_id)} className="w-full flex items-center justify-between p-4 hover:bg-prospex-bg/30 transition-colors">
          <div className="flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 rounded-lg bg-prospex-cyan/10 flex items-center justify-center text-sm font-bold text-prospex-cyan shrink-0">
-           {session.leads.length || session.total_found}
+           {session.total_found}
           </div>
           <div className="text-left min-w-0">
            <p className="text-sm font-medium text-white truncate">
             {session.niche} <span className="text-prospex-muted">in</span> {session.location}, {session.country}
            </p>
-           <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+           <div className="flex items-center gap-2 mt-0.5">
             <span className="text-[10px] text-prospex-muted">{formatRelativeTime(session.created_at)}</span>
             <span className="text-[10px] text-prospex-muted">·</span>
             <span className="text-[10px] text-prospex-muted">{session.source}</span>
             <span className="text-[10px] text-prospex-muted">·</span>
             <span className={`text-[10px] px-1.5 py-0.5 rounded border ${statusColor}`}>{session.status}</span>
             {unsavedCount > 0 && (
-             <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400">{unsavedCount} unsaved</span>
+             <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400">
+              {unsavedCount} unsaved
+             </span>
             )}
            </div>
           </div>
          </div>
          <div className="flex items-center gap-2 shrink-0 ml-3">
           <span className="text-xs text-prospex-muted font-mono">
-           {session.total_saved}/{session.leads.length || session.total_found} saved
+           {session.total_saved}/{session.total_found} saved
           </span>
           {isExpanded ? <ChevronUp className="w-4 h-4 text-prospex-muted" /> : <ChevronDown className="w-4 h-4 text-prospex-muted" />}
          </div>
         </button>
 
+        {/* Expanded Leads Table */}
         {isExpanded && (
          <div className="border-t border-prospex-border">
+          {/* Session Actions */}
           <div className="flex items-center justify-between px-4 py-2.5 bg-prospex-bg/30 border-b border-prospex-border/50">
            <div className="flex items-center gap-2">
-            <button onClick={() => saveAllFromSession(session)} disabled={bulkSaving} className="flex items-center gap-1.5 px-3 py-1.5 bg-prospex-cyan text-white font-semibold text-xs rounded-lg hover:bg-prospex-cyan/80 disabled:opacity-50">
-             {bulkSaving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
-             Push All to DB ({session.leads.length})
-            </button>
+            {unsavedCount > 0 && (
+             <button onClick={() => saveAllFromSession(session)} disabled={bulkSaving} className="flex items-center gap-1.5 px-3 py-1.5 bg-prospex-cyan text-white font-semibold text-xs rounded-lg hover:bg-prospex-cyan/80 disabled:opacity-50">
+              {bulkSaving ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+              Save All Unsaved ({unsavedCount})
+             </button>
+            )}
             <button onClick={() => exportCSV(session)} className="flex items-center gap-1.5 px-3 py-1.5 bg-prospex-bg border border-prospex-border text-xs text-white rounded-lg hover:border-prospex-cyan/40">
              <Download className="w-3 h-3" /> Export CSV
             </button>
@@ -419,6 +343,7 @@ export default function ScrapeHistoryPage() {
            </div>
           )}
 
+          {/* Leads Table */}
           <div className="overflow-x-auto">
            <table className="w-full">
             <thead>
@@ -426,7 +351,7 @@ export default function ScrapeHistoryPage() {
               <th className="text-left px-3 py-2 text-[10px] font-mono text-prospex-muted uppercase">Business</th>
               <th className="text-left px-3 py-2 text-[10px] font-mono text-prospex-muted uppercase">Phone</th>
               <th className="text-left px-3 py-2 text-[10px] font-mono text-prospex-muted uppercase">Email</th>
-              <th className="text-left px-3 py-2 text-[10px] font-mono text-prospex-muted uppercase">Website</th>
+              <th className="text-left px-3 py-2 text-[10px] font-mono text-prospex-muted uppercase">Instagram</th>
               <th className="text-left px-3 py-2 text-[10px] font-mono text-prospex-muted uppercase">Rating</th>
               <th className="text-left px-3 py-2 text-[10px] font-mono text-prospex-muted uppercase">Status</th>
               <th className="text-right px-3 py-2 text-[10px] font-mono text-prospex-muted uppercase">Action</th>
@@ -437,6 +362,7 @@ export default function ScrapeHistoryPage() {
               const key = `${session.scrape_id}-${idx}`;
               const isSaving = savingLeads.has(key);
               const justSaved = savedLeads.has(key);
+
               return (
                <tr key={idx} className={cn('border-t border-prospex-border/30 hover:bg-prospex-bg/20', lead.saved_to_db && 'opacity-60')}>
                 <td className="px-3 py-2">
@@ -444,15 +370,19 @@ export default function ScrapeHistoryPage() {
                  <p className="text-[10px] text-prospex-muted truncate max-w-[200px]">{lead.address || lead.city || '—'}</p>
                 </td>
                 <td className="px-3 py-2">
-                 {lead.phone ? <span className="text-[10px] text-prospex-muted font-mono">{lead.phone}</span> : <span className="text-[10px] text-prospex-dim">—</span>}
+                 {lead.phone ? (
+                  <span className="text-[10px] text-prospex-muted font-mono">{lead.phone}</span>
+                 ) : <span className="text-[10px] text-prospex-dim">—</span>}
                 </td>
                 <td className="px-3 py-2">
-                 {lead.email ? <span className="text-[10px] text-prospex-muted truncate block max-w-[140px]">{lead.email}</span> : <span className="text-[10px] text-prospex-dim">—</span>}
+                 {lead.email ? (
+                  <span className="text-[10px] text-prospex-muted truncate block max-w-[140px]">{lead.email}</span>
+                 ) : <span className="text-[10px] text-prospex-dim">—</span>}
                 </td>
                 <td className="px-3 py-2">
-                 {lead.website ? (
-                  <a href={lead.website} target="_blank" rel="noopener noreferrer" className="text-[10px] text-prospex-cyan hover:underline truncate block max-w-[120px]">
-                   {lead.website.replace(/^https?:\/\/(www\.)?/, '').slice(0, 25)}
+                 {lead.instagram_url ? (
+                  <a href={lead.instagram_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-pink-400 hover:text-pink-300">
+                   @{lead.instagram_url.split('/').filter(Boolean).pop()}
                   </a>
                  ) : <span className="text-[10px] text-prospex-dim">—</span>}
                 </td>
@@ -471,19 +401,18 @@ export default function ScrapeHistoryPage() {
                  )}
                 </td>
                 <td className="px-3 py-2 text-right">
-                 <button
-                  onClick={() => saveLead(session, lead, idx)}
-                  disabled={isSaving || (lead.saved_to_db && !justSaved)}
-                  className={cn(
-                   'flex items-center gap-1 px-2 py-1 text-[10px] rounded transition-colors ml-auto',
-                   lead.saved_to_db
-                    ? 'bg-green-500/10 text-green-400 cursor-default'
-                    : 'bg-prospex-cyan/20 text-prospex-cyan hover:bg-prospex-cyan/30 disabled:opacity-50'
-                  )}
-                 >
-                  {isSaving ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : lead.saved_to_db ? <Check className="w-2.5 h-2.5" /> : <Database className="w-2.5 h-2.5" />}
-                  {isSaving ? 'Saving...' : lead.saved_to_db ? 'In DB' : 'Save'}
-                 </button>
+                 {lead.saved_to_db ? (
+                  <span className="text-[10px] text-prospex-dim">In database</span>
+                 ) : (
+                  <button
+                   onClick={() => saveLead(session, lead, idx)}
+                   disabled={isSaving}
+                   className="flex items-center gap-1 px-2 py-1 bg-prospex-cyan/20 text-prospex-cyan text-[10px] rounded hover:bg-prospex-cyan/30 transition-colors ml-auto disabled:opacity-50"
+                  >
+                   {isSaving ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : justSaved ? <Check className="w-2.5 h-2.5" /> : <Database className="w-2.5 h-2.5" />}
+                   {isSaving ? 'Saving...' : justSaved ? 'Saved!' : 'Save'}
+                  </button>
+                 )}
                 </td>
                </tr>
               );
