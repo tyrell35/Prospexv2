@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
+import NicheAutocomplete from '@/components/NicheAutocomplete';
 import { UK_AFFLUENT_CITIES, US_AFFLUENT_CITIES, CA_AFFLUENT_CITIES, getCitiesByRegion, getRegions } from '@/lib/affluent-cities';
 import type { CityData } from '@/lib/affluent-cities';
 
@@ -169,21 +170,23 @@ export default function CityScraper() {
           }
         }
 
-        // Log to scrape history
+        // Log to scrape history (localStorage + Supabase)
+        const citySessionData = {
+          scrape_id: `city-${Date.now()}-${i}`,
+          created_at: new Date().toISOString(),
+          niche: niche.trim(), location: citiesToScrape[i].name, country: countryName,
+          source: 'google_maps', status: 'complete',
+          total_found: foundLeads.length, total_saved: savedCount,
+          error_message: null,
+          leads: foundLeads.map(l => ({ ...l, saved_to_db: savedCount > 0 })),
+        };
         try {
           const logRaw = localStorage.getItem('prospex_scrape_log') || '[]';
           const log = JSON.parse(logRaw);
-          log.unshift({
-            scrape_id: `city-${Date.now()}-${i}`,
-            created_at: new Date().toISOString(),
-            niche: niche.trim(), location: citiesToScrape[i].name, country: countryName,
-            source: 'google_maps', status: 'complete',
-            total_found: foundLeads.length, total_saved: savedCount,
-            error_message: null,
-            leads: foundLeads.map(l => ({ ...l, saved_to_db: savedCount > 0 })),
-          });
+          log.unshift(citySessionData);
           localStorage.setItem('prospex_scrape_log', JSON.stringify(log.slice(0, 200)));
         } catch { /* silent */ }
+        supabase.from('scrape_sessions').insert(citySessionData).then(() => {});
 
         setResults(prev => prev.map((r, idx) => idx === i ? {
           ...r, status: 'done', leadsFound: foundLeads.length, leadsSaved: savedCount, leads: foundLeads,
@@ -277,7 +280,7 @@ export default function CityScraper() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">Niche</label>
-            <input value={niche} onChange={e => setNiche(e.target.value)} disabled={isRunning} className="input" placeholder="e.g. med spa, aesthetic clinic" />
+            <NicheAutocomplete value={niche} onChange={setNiche} placeholder="e.g. med spa, aesthetic clinic" disabled={isRunning} />
           </div>
           <div>
             <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">Country</label>

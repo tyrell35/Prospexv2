@@ -1,8 +1,7 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 import './globals.css';
-import Sidebar from '@/components/layout/Sidebar';
-import LayoutWrapper from '@/components/layout/LayoutWrapper';
+import AppShell from '@/components/AppShell';
 
 export const metadata: Metadata = {
   title: 'Prospex — Precision Prospecting',
@@ -13,8 +12,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body className="min-h-screen bg-prospex-bg">
-        <Sidebar />
-        <LayoutWrapper>{children}</LayoutWrapper>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

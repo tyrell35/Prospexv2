@@ -5,6 +5,7 @@ import { Search, MapPin, Globe, Loader2, Check, Database, AlertCircle, Plus, Clo
 import { supabase } from '@/lib/supabase';
 import { cn, getSourceConfig, formatRelativeTime } from '@/lib/utils';
 import LocationAutocomplete from '@/components/LocationAutocomplete';
+import NicheAutocomplete from '@/components/NicheAutocomplete';
 import type { ScrapeResult, SearchHistory } from '@/lib/types';
 
 const COUNTRIES = ['United Kingdom', 'United States', 'Canada', 'Australia', 'Ireland', 'Germany', 'France', 'Spain', 'Italy', 'Netherlands'];
@@ -45,23 +46,25 @@ export default function SearchPage() {
 
     // Generate a unique scrape ID for logging
     const scrapeId = `scrape-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sessionData = {
+      scrape_id: scrapeId,
+      created_at: new Date().toISOString(),
+      niche, location, country, source,
+      status: 'started' as string,
+      total_found: 0,
+      total_saved: 0,
+      error_message: null as string | null,
+      leads: [] as ScrapeResult[],
+    };
 
-    // Log scrape as started
+    // Log scrape as started (localStorage + Supabase)
     try {
       const logRaw = localStorage.getItem('prospex_scrape_log') || '[]';
       const log = JSON.parse(logRaw);
-      log.unshift({
-        scrape_id: scrapeId,
-        created_at: new Date().toISOString(),
-        niche, location, country, source,
-        status: 'started',
-        total_found: 0,
-        total_saved: 0,
-        error_message: null,
-        leads: [],
-      });
+      log.unshift(sessionData);
       localStorage.setItem('prospex_scrape_log', JSON.stringify(log.slice(0, 100)));
     } catch { /* silent */ }
+    supabase.from('scrape_sessions').insert(sessionData).then(() => {});
 
     try {
       const body: Record<string, unknown> = { niche, location, country, source };
@@ -80,6 +83,7 @@ export default function SearchPage() {
           if (entry) { entry.status = 'error'; entry.error_message = data.error || 'Search failed'; }
           localStorage.setItem('prospex_scrape_log', JSON.stringify(log));
         } catch { /* silent */ }
+        supabase.from('scrape_sessions').update({ status: 'error', error_message: data.error || 'Search failed' }).eq('scrape_id', scrapeId).then(() => {});
         throw new Error(data.error || 'Search failed');
       }
       setResults(data.results || []);
@@ -87,21 +91,27 @@ export default function SearchPage() {
       if (data.results?.length === 0) setError('No results found. Try a different niche or location.');
 
       // ─── AUTO-LOG ALL RESULTS IMMEDIATELY ─────────
+      const logLeads = (data.results || []).map((r: ScrapeResult) => ({ ...r, saved_to_db: false }));
+      const logStatus = data.errors?.length > 0 ? 'partial' : 'complete';
+      const logErrorMsg = data.errors?.join('; ') || null;
       try {
         const logRaw = localStorage.getItem('prospex_scrape_log') || '[]';
         const log = JSON.parse(logRaw);
         const entry = log.find((e: { scrape_id: string }) => e.scrape_id === scrapeId);
         if (entry) {
-          entry.status = data.errors?.length > 0 ? 'partial' : 'complete';
+          entry.status = logStatus;
           entry.total_found = data.results?.length || 0;
-          entry.error_message = data.errors?.join('; ') || null;
-          entry.leads = (data.results || []).map((r: ScrapeResult) => ({
-            ...r,
-            saved_to_db: false,
-          }));
+          entry.error_message = logErrorMsg;
+          entry.leads = logLeads;
         }
         localStorage.setItem('prospex_scrape_log', JSON.stringify(log));
       } catch { /* silent */ }
+      supabase.from('scrape_sessions').update({
+        status: logStatus,
+        total_found: data.results?.length || 0,
+        error_message: logErrorMsg,
+        leads: logLeads,
+      }).eq('scrape_id', scrapeId).then(() => {});
 
       // Show enrichment stats
       if (data.enrichmentStats) {
@@ -122,7 +132,7 @@ export default function SearchPage() {
   };
 
   const handleSaveAll = async () => {
-    const toSave = selectedResults.size > 0 ? results.filter((_, i) => selectedResults.has(i)) : results;
+    const toSave = selectedResults.size > 0 ? results.filter((_: ScrapeResult, i: number) => selectedResults.has(i)) : results;
     if (toSave.length === 0) return;
     setSaving(true);
     try {
@@ -131,7 +141,7 @@ export default function SearchPage() {
         if (existing) {
           await supabase.from('leads').update({ phone: result.phone || undefined, email: result.email || undefined, website: result.website || undefined, instagram_url: result.instagram_url || undefined, google_rating: result.google_rating || undefined, google_review_count: result.google_review_count || undefined, updated_at: new Date().toISOString() }).eq('id', existing.id);
         } else {
-          await supabase.from('leads').insert({ business_name: result.business_name, address: result.address, city: location, country, phone: result.phone, email: result.email, website: result.website, instagram_url: result.instagram_url, google_rating: result.google_rating, google_review_count: result.google_review_count, google_maps_url: result.google_maps_url, source: result.source });
+          await supabase.from('leads').insert({ business_name: result.business_name, address: result.address, city: location, country, niche, phone: result.phone, email: result.email, website: result.website, instagram_url: result.instagram_url, google_rating: result.google_rating, google_review_count: result.google_review_count, google_maps_url: result.google_maps_url, source: result.source });
         }
       }
       await supabase.from('activity_log').insert({ action_type: 'scrape', description: `Scraped ${toSave.length} leads for "${niche}" in "${location}, ${country}" from ${source}` });
@@ -140,8 +150,7 @@ export default function SearchPage() {
       try {
         const logRaw = localStorage.getItem('prospex_scrape_log') || '[]';
         const log = JSON.parse(logRaw);
-        // Find most recent matching session
-        const savedNames = new Set(toSave.map(r => r.business_name.toLowerCase()));
+        const savedNames = new Set(toSave.map((r: ScrapeResult) => r.business_name.toLowerCase()));
         for (const entry of log) {
           if (entry.leads && Array.isArray(entry.leads)) {
             let changed = false;
@@ -153,6 +162,8 @@ export default function SearchPage() {
             }
             if (changed) {
               entry.total_saved = entry.leads.filter((l: { saved_to_db: boolean }) => l.saved_to_db).length;
+              // Also update in Supabase
+              supabase.from('scrape_sessions').update({ leads: entry.leads, total_saved: entry.total_saved }).eq('scrape_id', entry.scrape_id).then(() => {});
             }
           }
         }
@@ -166,8 +177,8 @@ export default function SearchPage() {
     } finally { setSaving(false); }
   };
 
-  const toggleResult = (index: number) => setSelectedResults(prev => { const next = new Set(prev); if (next.has(index)) next.delete(index); else next.add(index); return next; });
-  const toggleAll = () => selectedResults.size === results.length ? setSelectedResults(new Set()) : setSelectedResults(new Set(results.map((_, i) => i)));
+  const toggleResult = (index: number) => setSelectedResults((prev: Set<number>) => { const next = new Set(prev); if (next.has(index)) next.delete(index); else next.add(index); return next; });
+  const toggleAll = () => selectedResults.size === results.length ? setSelectedResults(new Set()) : setSelectedResults(new Set(results.map((_: ScrapeResult, i: number) => i)));
   const rerunSearch = (h: SearchHistory) => { setNiche(h.niche); setLocation(h.location); if (h.country) setCountry(h.country); setSource(h.source as typeof source); setLat(null); setLng(null); };
 
   return (
@@ -183,9 +194,12 @@ export default function SearchPage() {
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
             <div>
               <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">Niche</label>
-              <div className="relative"><Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-prospex-dim" />
-                <input type="text" placeholder="e.g. med spa" value={niche} onChange={(e) => setNiche(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSearch()} className="input pl-9" />
-              </div>
+              <NicheAutocomplete
+                value={niche}
+                onChange={setNiche}
+                placeholder="e.g. med spa, laser hair removal"
+                disabled={loading}
+              />
             </div>
             <div>
               <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">Location</label>
