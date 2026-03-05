@@ -364,7 +364,7 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (enrollment) {
-        await supabase.rpc('increment_sequence_replies', { seq_id: enrollment.sequence_id }).catch(() => {
+        try { await supabase.rpc('increment_sequence_replies', { seq_id: enrollment.sequence_id }); } catch {
           // Fallback: manual update
           supabase.from('outreach_sequences')
             .select('total_replied')
