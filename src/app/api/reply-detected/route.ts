@@ -364,20 +364,17 @@ export async function POST(req: NextRequest) {
         .single();
 
       if (enrollment) {
-        try { await supabase.rpc('increment_sequence_replies', { seq_id: enrollment.sequence_id }); } catch {
-          // Fallback: manual update
-          supabase.from('outreach_sequences')
-            .select('total_replied')
-            .eq('id', enrollment.sequence_id)
-            .single()
-            .then(({ data }) => {
-              if (data) {
-                supabase.from('outreach_sequences')
-                  .update({ total_replied: (data.total_replied || 0) + 1 })
-                  .eq('id', enrollment.sequence_id);
-              }
-            });
-        });
+        const { data: seqData } = await supabase
+          .from('outreach_sequences')
+          .select('total_replied')
+          .eq('id', enrollment.sequence_id)
+          .single();
+        if (seqData) {
+          await supabase
+            .from('outreach_sequences')
+            .update({ total_replied: (seqData.total_replied || 0) + 1 })
+            .eq('id', enrollment.sequence_id);
+        }
       }
     }
 
