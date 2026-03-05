@@ -391,7 +391,7 @@ export default function AutomationsPage() {
           <Settings className="w-12 h-12 text-prospex-accent/30 mx-auto mb-4" />
           <h2 className="text-lg font-semibold text-prospex-text mb-2">No Automation Rules Yet</h2>
           <p className="text-sm text-prospex-muted mb-4 max-w-md mx-auto">
-            Create rules like: "When reply intent = positive interest AND lead score > 70 → Activate AI qualifier"
+            Create rules like: "When reply intent = positive interest AND lead score &gt; 70 → Activate AI qualifier"
           </p>
           <button onClick={() => { setEditingRule(null); setShowBuilder(true); }}
             className="btn bg-prospex-accent/15 text-prospex-accent border border-prospex-accent/30 px-4 py-2 text-sm">
