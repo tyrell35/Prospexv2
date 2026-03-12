@@ -345,7 +345,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No leads found' }, { status: 404 });
     }
 
-    const results = [];
+    const results: any[] = [];
 
     for (const lead of leads) {
       // 1. Validate existing Instagram
