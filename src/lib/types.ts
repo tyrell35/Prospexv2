@@ -9,6 +9,12 @@ export interface Lead {
   email: string | null;
   website: string | null;
   instagram_url: string | null;
+  whatsapp_eligible: boolean;
+  phone_type: string | null;
+  phone_formatted: string | null;
+  instagram_handle: string | null;
+  instagram_verified: boolean;
+  contact_quality_score: number;
   google_rating: number | null;
   google_review_count: number | null;
   google_maps_url: string | null;
@@ -258,6 +264,12 @@ export interface ScrapeResult {
   email: string | null;
   website: string | null;
   instagram_url: string | null;
+  whatsapp_eligible: boolean;
+  phone_type: string | null;
+  phone_formatted: string | null;
+  instagram_handle: string | null;
+  instagram_verified: boolean;
+  contact_quality_score: number;
   google_rating: number | null;
   google_review_count: number | null;
   google_maps_url: string | null;
