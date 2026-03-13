@@ -137,7 +137,7 @@ async function sendViaEmail(
     .from('email_accounts')
     .select('*')
     .eq('is_active', true)
-    .lt('sent_today', supabase.rpc ? 50 : 50)
+    .lt('sent_today', 50)
     .order('sent_today', { ascending: true })
     .limit(1)
     .single();
@@ -480,7 +480,7 @@ export async function POST(req: NextRequest) {
 
           // Update sequence stats
           await supabase.from('outreach_sequences').update({
-            total_sent: supabase.rpc ? 0 : 0, // Will use raw increment below
+            // total_sent incremented below
           }).eq('id', item.sequence_id);
 
           // Queue next step if exists
