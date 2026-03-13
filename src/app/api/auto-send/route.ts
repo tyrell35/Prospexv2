@@ -418,6 +418,28 @@ export async function POST(req: NextRequest) {
         // SEND via appropriate channel
         let sendResult: { success: boolean; externalId?: string; error?: string } = { success: false, error: 'No send method configured' };
 
+        // Instagram = manual assist (user copies + sends via browser)
+        if (item.channel === 'instagram') {
+          // Mark as ready for manual send — don't try GHL
+          await supabase.from('outreach_queue').update({
+            status: 'manual_ready',
+            message_body: finalMessage,
+            processed_at: new Date().toISOString(),
+          }).eq('id', item.id);
+
+          await supabase.from('outreach_messages').insert({
+            enrollment_id: item.enrollment_id, sequence_id: item.sequence_id,
+            lead_id: item.lead_id, channel: 'instagram', step_number: item.step_number,
+            variant_id: item.variant_id, message_body: finalMessage,
+            is_ai_personalized: item.is_personalized, status: 'manual_ready',
+            sent_via: 'manual', typing_delay_ms: typingDelay, delay_seconds: sendDelay,
+          });
+
+          sent++;
+          sendResults.push({ id: item.id, lead: item.business_name, channel: 'instagram', status: 'manual_ready', message: finalMessage, handle: item.contact_handle });
+          continue;
+        }
+
         if (ghlKey && ghlLocation) {
           sendResult = await sendViaGHL(item.channel, item.contact_handle, finalMessage, ghlKey, ghlLocation, item.business_name || '');
         } else if (item.channel === 'email') {
@@ -598,6 +620,32 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // ── MARK AS MANUALLY SENT ──
+    if (action === 'mark_sent') {
+      const { queue_id } = body;
+      if (!queue_id) return NextResponse.json({ error: 'queue_id required' }, { status: 400 });
+
+      const now = new Date().toISOString();
+      
+      // Update queue item
+      await supabase.from('outreach_queue').update({ status: 'sent', processed_at: now }).eq('id', queue_id);
+      
+      // Update the outreach message
+      await supabase.from('outreach_messages').update({ status: 'sent', sent_at: now, sent_via: 'manual' })
+        .eq('status', 'manual_ready')
+        .eq('lead_id', (await supabase.from('outreach_queue').select('lead_id').eq('id', queue_id).single()).data?.lead_id);
+
+      // Update enrollment
+      const { data: qItem } = await supabase.from('outreach_queue').select('enrollment_id, step_number').eq('id', queue_id).single();
+      if (qItem) {
+        await supabase.from('sequence_enrollments').update({
+          current_step: qItem.step_number, last_sent_at: now, status: 'active',
+        }).eq('id', qItem.enrollment_id);
+      }
+
+      return NextResponse.json({ marked: true, queue_id });
+    }
+
     return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
 
   } catch (err: any) {
@@ -637,6 +685,33 @@ export async function GET(req: NextRequest) {
             sms: `${settings.sms_sent_today}/${settings.sms_daily_limit}`,
           },
         } : null,
+      });
+    }
+
+    if (view === 'manual_queue') {
+      // Return Instagram messages ready for manual send
+      const { data: manualItems } = await supabase
+        .from('outreach_queue')
+        .select('id, business_name, contact_handle, channel, message_body, step_number, lead_id, sequence_id')
+        .eq('status', 'manual_ready')
+        .order('created_at', { ascending: true });
+
+      return NextResponse.json({
+        items: (manualItems || []).map((item: any) => ({
+          id: item.id,
+          lead_id: item.lead_id,
+          business_name: item.business_name,
+          handle: item.contact_handle,
+          channel: item.channel,
+          message: item.message_body,
+          dm_link: item.channel === 'instagram'
+            ? `https://ig.me/m/${item.contact_handle}`
+            : item.channel === 'whatsapp'
+            ? `https://wa.me/${item.contact_handle.replace(/[^0-9]/g, '')}`
+            : null,
+          step: item.step_number,
+        })),
+        count: manualItems?.length || 0,
       });
     }
 
