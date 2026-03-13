@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Database, Search, Settings, Crosshair, FileText, BarChart3, Columns3, Upload, TrendingUp, MapPin, Eye, BookOpen, Brain, Activity, Zap, MessageSquare } from 'lucide-react';
+import { LayoutDashboard, Database, Search, Settings, Crosshair, FileText, BarChart3, Columns3, Upload, TrendingUp, MapPin, Eye, BookOpen, Brain, Activity, Zap, MessageSquare, Rocket } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigation = [
@@ -15,6 +15,7 @@ const navigation = [
   { name: 'Sequences', href: '/sequences', icon: Zap },
   { name: 'Conversations', href: '/conversations', icon: MessageSquare },
   { name: 'Automations', href: '/automations', icon: Settings },
+  { name: 'Launch Outreach', href: '/outreach-launch', icon: Rocket },
   { name: 'Templates', href: '/templates', icon: BookOpen },
   { name: 'Outreach Coach', href: '/outreach-coach', icon: Brain },
   { name: 'Outreach Analytics', href: '/outreach-analytics', icon: Activity },
