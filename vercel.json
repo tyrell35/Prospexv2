@@ -1,8 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/auto-send?cron=true",
-      "schedule": "0 9 * * 1-6"
-    }
-  ]
-}
+{}
