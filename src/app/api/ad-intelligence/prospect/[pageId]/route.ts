@@ -52,7 +52,7 @@ export async function GET(
     }
 
     // Check if prospect is linked to a lead
-    let linkedLead = null;
+    let linkedLead: any = null;
     if (prospect.lead_id) {
       const { data: lead } = await supabase
         .from('leads')
