@@ -174,15 +174,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'lead_id or lead_ids required' }, { status: 400 });
     }
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      // Try settings table
+    // Read API key from Vercel env var (primary) or settings table (fallback)
+    let key = process.env.ANTHROPIC_API_KEY || '';
+    if (!key) {
       const { data: settings } = await supabase.from('settings').select('anthropic_key').limit(1).maybeSingle();
-      if (!settings?.anthropic_key) {
-        return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 });
-      }
+      key = (settings as Record<string, unknown> | null)?.anthropic_key as string || '';
     }
-    const key = apiKey || '';
+    if (!key) {
+      return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured. Add it to Vercel env vars or Settings page.' }, { status: 500 });
+    }
 
     const results: { lead_id: string; status: string; playbook_id?: string }[] = [];
 
@@ -222,6 +222,7 @@ export async function POST(request: NextRequest) {
           body: JSON.stringify({
             model: 'claude-sonnet-4-20250514',
             max_tokens: 4000,
+            tools: [{ type: 'web_search_20250305', name: 'web_search' }],
             messages: [{ role: 'user', content: prompt }],
           }),
         });

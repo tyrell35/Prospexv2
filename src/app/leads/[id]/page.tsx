@@ -22,6 +22,14 @@ import {
   X,
   RefreshCw,
   AlertCircle,
+  ScrollText,
+  Copy,
+  Send,
+  Loader2,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  Download,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getScoreBgColor, getGrade, getSourceConfig, getPriorityConfig, formatDate, formatRelativeTime } from '@/lib/utils';
@@ -77,6 +85,10 @@ export default function LeadDetailPage() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [ghlLoading, setGhlLoading] = useState(false);
   const [deepAuditLoading, setDeepAuditLoading] = useState(false);
+  const [playbook, setPlaybook] = useState<Record<string, unknown> | null>(null);
+  const [playbookLoading, setPlaybookLoading] = useState(false);
+  const [playbookExpanded, setPlaybookExpanded] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
 
   const fetchLead = async () => {
     try {
@@ -109,6 +121,16 @@ export default function LeadDetailPage() {
         .limit(20);
 
       setActivities(actData || []);
+
+      // Fetch playbook if exists
+      const { data: pbData } = await supabase
+        .from('playbooks')
+        .select('*')
+        .eq('lead_id', leadId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      setPlaybook(pbData as Record<string, unknown> | null);
     } catch (error) {
       console.error('Failed to fetch lead:', error);
     } finally {
@@ -186,6 +208,43 @@ export default function LeadDetailPage() {
     router.push('/leads');
   };
 
+  const handleGeneratePlaybook = async () => {
+    if (!lead) return;
+    setPlaybookLoading(true);
+    try {
+      const res = await fetch('/api/generate-playbook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_id: lead.id }),
+      });
+      if (res.ok) {
+        await fetchLead();
+        setPlaybookExpanded(true);
+      }
+    } catch (err) {
+      console.error('Playbook generation failed:', err);
+    } finally {
+      setPlaybookLoading(false);
+    }
+  };
+
+  const copyToClipboard = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const postPlaybookToSlack = async () => {
+    if (!lead || !playbook) return;
+    await fetch('/api/slack-post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lead_id: lead.id, playbook_id: playbook.id }),
+    });
+    setCopied('slack');
+    setTimeout(() => setCopied(null), 2000);
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -246,6 +305,18 @@ export default function LeadDetailPage() {
               {ghlLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
               Push to GHL
             </button>
+          )}
+          {/* Generate Playbook */}
+          {!playbook && (
+            <button onClick={handleGeneratePlaybook} disabled={playbookLoading} className="btn text-xs bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/40 hover:bg-prospex-cyan/30">
+              {playbookLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScrollText className="w-3.5 h-3.5" />}
+              {playbookLoading ? 'Generating...' : 'Generate Playbook'}
+            </button>
+          )}
+          {playbook && (
+            <span className="badge bg-prospex-green/20 text-prospex-green border-prospex-green/40">
+              <ScrollText className="w-3 h-3" /> Playbook Ready
+            </span>
           )}
           <button onClick={handleDelete} className="btn-danger text-xs">
             <Trash2 className="w-3.5 h-3.5" />
@@ -416,6 +487,113 @@ export default function LeadDetailPage() {
               <p className={cn('text-3xl font-mono font-bold mt-1', getScoreColor(deepAudit.overall_score))}>
                 {deepAudit.overall_score}
               </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Growth Playbook */}
+      {playbookLoading && (
+        <div className="card p-6 border-prospex-cyan/30">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-5 h-5 text-prospex-cyan animate-spin" />
+            <div>
+              <p className="text-sm font-mono text-prospex-cyan">Generating Growth Playbook for {lead.business_name}...</p>
+              <p className="text-xs text-prospex-dim mt-1">This takes 30-60 seconds. Analysing market, competitors, and revenue opportunities.</p>
+            </div>
+          </div>
+        </div>
+      )}
+      {playbook && (
+        <div className="card p-6 border-prospex-cyan/30">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-mono font-semibold text-prospex-text flex items-center gap-2">
+              <ScrollText className="w-5 h-5 text-prospex-cyan" />
+              Growth Playbook
+            </h2>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-prospex-dim">
+                Generated {playbook.created_at ? new Date(playbook.created_at as string).toLocaleDateString('en-GB') : ''}
+              </span>
+              <span className={cn('badge text-[10px]',
+                playbook.status === 'ready' ? 'bg-prospex-green/20 text-prospex-green border-prospex-green/40' :
+                playbook.status === 'sent' ? 'bg-prospex-cyan/20 text-prospex-cyan border-prospex-cyan/40' :
+                'bg-prospex-dim/20 text-prospex-dim'
+              )}>{String(playbook.status)}</span>
+            </div>
+          </div>
+
+          {/* Scores row */}
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div className="p-3 rounded-lg bg-prospex-bg border border-prospex-border text-center">
+              <p className="text-[10px] font-mono text-prospex-dim uppercase">Growth Score</p>
+              <p className={cn('text-xl font-mono font-bold mt-1', getScoreColor(Number(playbook.growth_score) || 0))}>
+                {String(playbook.growth_score || '—')}<span className="text-xs text-prospex-dim">/100</span>
+              </p>
+            </div>
+            <div className="p-3 rounded-lg bg-prospex-bg border border-prospex-border text-center">
+              <p className="text-[10px] font-mono text-prospex-dim uppercase">Revenue Leak</p>
+              <p className="text-xl font-mono font-bold text-prospex-red mt-1">{String(playbook.revenue_leak || '—')}<span className="text-xs text-prospex-dim">/mo</span></p>
+            </div>
+            <div className="p-3 rounded-lg bg-prospex-bg border border-prospex-border text-center">
+              <p className="text-[10px] font-mono text-prospex-dim uppercase">Recommended Tier</p>
+              <p className="text-xl font-mono font-bold text-prospex-amber mt-1">{String(playbook.recommended_tier || '—')}</p>
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 mb-4">
+            {!!playbook.email_subject && (
+              <button onClick={() => copyToClipboard(`Subject: ${String(playbook.email_subject)}\n\n${String(playbook.email_body || '')}`, 'email')}
+                className="btn text-xs bg-prospex-bg border border-prospex-border text-prospex-muted hover:text-prospex-text">
+                {copied === 'email' ? <Check className="w-3 h-3 text-prospex-green" /> : <Copy className="w-3 h-3" />}
+                Copy Email
+              </button>
+            )}
+            {!!playbook.dm_text && (
+              <button onClick={() => copyToClipboard(String(playbook.dm_text), 'dm')}
+                className="btn text-xs bg-prospex-bg border border-prospex-border text-prospex-muted hover:text-prospex-text">
+                {copied === 'dm' ? <Check className="w-3 h-3 text-prospex-green" /> : <Copy className="w-3 h-3" />}
+                Copy DM
+              </button>
+            )}
+            <button onClick={postPlaybookToSlack}
+              className="btn text-xs bg-prospex-bg border border-prospex-border text-prospex-muted hover:text-prospex-text">
+              {copied === 'slack' ? <Check className="w-3 h-3 text-prospex-green" /> : <Send className="w-3 h-3" />}
+              Post to Slack
+            </button>
+            <button disabled className="btn text-xs bg-prospex-bg border border-prospex-border text-prospex-dim cursor-not-allowed opacity-50">
+              <Download className="w-3 h-3" /> Download PDF
+            </button>
+          </div>
+
+          {/* Outreach copy */}
+          {!!playbook.email_subject && (
+            <div className="p-3 rounded-lg bg-prospex-bg border border-prospex-border mb-3">
+              <p className="text-[10px] font-mono text-prospex-dim uppercase mb-1">Cold Email</p>
+              <p className="text-xs font-mono text-prospex-amber mb-1">Subject: {String(playbook.email_subject)}</p>
+              <p className="text-xs font-mono text-prospex-muted whitespace-pre-wrap">{String(playbook.email_body || '')}</p>
+            </div>
+          )}
+          {!!playbook.dm_text && (
+            <div className="p-3 rounded-lg bg-prospex-bg border border-prospex-border mb-3">
+              <p className="text-[10px] font-mono text-prospex-dim uppercase mb-1">Instagram DM</p>
+              <p className="text-xs font-mono text-prospex-muted whitespace-pre-wrap">{String(playbook.dm_text)}</p>
+            </div>
+          )}
+
+          {/* Expandable full playbook */}
+          <button onClick={() => setPlaybookExpanded(!playbookExpanded)}
+            className="w-full flex items-center justify-between p-3 rounded-lg bg-prospex-bg border border-prospex-border hover:border-prospex-cyan/30 transition-colors">
+            <span className="text-xs font-mono text-prospex-muted flex items-center gap-2">
+              <Sparkles className="w-3 h-3 text-prospex-cyan" />
+              Full Growth Playbook ({String(playbook.content || '').split('\n').length} lines)
+            </span>
+            {playbookExpanded ? <ChevronUp className="w-4 h-4 text-prospex-dim" /> : <ChevronDown className="w-4 h-4 text-prospex-dim" />}
+          </button>
+          {playbookExpanded && (
+            <div className="mt-3 p-4 rounded-lg bg-prospex-bg border border-prospex-border max-h-[500px] overflow-y-auto">
+              <pre className="text-xs font-mono text-prospex-muted whitespace-pre-wrap leading-relaxed">{String(playbook.content || '')}</pre>
             </div>
           )}
         </div>
