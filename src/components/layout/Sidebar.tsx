@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Database, Search, Settings, Crosshair, FileText, BarChart3, Columns3, Upload, TrendingUp, MapPin, Eye, BookOpen, Brain, Activity, Zap, MessageSquare, Rocket } from 'lucide-react';
+import { LayoutDashboard, Database, Search, Settings, Crosshair, FileText, BarChart3, Columns3, Upload, TrendingUp, MapPin, Eye, BookOpen, Brain, Activity, Zap, MessageSquare, Rocket, Globe, ScrollText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigation = [
@@ -10,6 +10,7 @@ const navigation = [
   { name: 'Lead Database', href: '/leads', icon: Database },
   { name: 'Search Leads', href: '/search', icon: Search },
   { name: 'Market Analysis', href: '/market-analysis', icon: TrendingUp },
+  { name: 'Affluent Areas', href: '/areas', icon: Globe },
   { name: 'City Scraper', href: '/city-scraper', icon: MapPin },
   { name: 'Ad Intelligence', href: '/ad-intelligence', icon: Eye },
   { name: 'Sequences', href: '/sequences', icon: Zap },
@@ -22,6 +23,7 @@ const navigation = [
   { name: 'Import CSV', href: '/import', icon: Upload },
   { name: 'Pipeline', href: '/pipeline', icon: Columns3 },
   { name: 'Pitches', href: '/pitch', icon: FileText },
+  { name: 'Playbooks', href: '/playbooks', icon: ScrollText },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Settings, Save, Eye, EyeOff, Check, X, Loader2, Wifi, AlertCircle, Building } from 'lucide-react';
+import { Settings, Save, Eye, EyeOff, Check, X, Loader2, Wifi, AlertCircle, Building, MessageSquare } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 
@@ -16,6 +16,7 @@ const fields: ApiKeyField[] = [
   { key: 'dataforseo_password', label: 'DataForSEO Password', envName: 'DATAFORSEO_PASSWORD', placeholder: 'Enter password', group: 'SEO' },
   { key: 'ghl_key', label: 'GoHighLevel API Key', envName: 'GHL_API_KEY', placeholder: 'Enter GHL API key', group: 'CRM' },
   { key: 'ghl_location_id', label: 'GHL Location ID', envName: 'GHL_LOCATION_ID', placeholder: 'Enter GHL Location ID', group: 'CRM' },
+  { key: 'anthropic_key', label: 'Anthropic API Key', envName: 'ANTHROPIC_API_KEY', placeholder: 'sk-ant-...', group: 'AI' },
 ];
 
 export default function SettingsPage() {
@@ -36,6 +37,11 @@ export default function SettingsPage() {
   const [defaultLocation, setDefaultLocation] = useState('');
   const [defaultCountry, setDefaultCountry] = useState('United Kingdom');
   const [ghlPipelineId, setGhlPipelineId] = useState('');
+  const [slackWebhookUrl, setSlackWebhookUrl] = useState('');
+  const [slackChannelName, setSlackChannelName] = useState('');
+  const [slackAutoPostLeads, setSlackAutoPostLeads] = useState(false);
+  const [slackAutoPostPlaybooks, setSlackAutoPostPlaybooks] = useState(false);
+  const [slackTestResult, setSlackTestResult] = useState<'success' | 'error' | null>(null);
 
   useEffect(() => {
     async function fetchSettings() {
@@ -56,6 +62,10 @@ export default function SettingsPage() {
           setDefaultLocation(data.default_location || '');
           setDefaultCountry(data.default_country || 'United Kingdom');
           setGhlPipelineId(data.ghl_pipeline_id || '');
+          setSlackWebhookUrl(data.slack_webhook_url || '');
+          setSlackChannelName(data.slack_channel_name || '');
+          setSlackAutoPostLeads(data.slack_auto_post_leads || false);
+          setSlackAutoPostPlaybooks(data.slack_auto_post_playbooks || false);
         }
       } catch (err) { console.error('Failed to load settings:', err); }
       finally { setLoading(false); }
@@ -66,7 +76,7 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true); setSaved(false);
     try {
-      const payload = { ...settings, agency_name: agencyName, agency_email: agencyEmail, agency_phone: agencyPhone, agency_website: agencyWebsite, agency_logo_url: agencyLogoUrl, calendar_type: calendarType, calendar_url: calendarUrl, default_niche: defaultNiche, default_location: defaultLocation, default_country: defaultCountry, ghl_pipeline_id: ghlPipelineId, updated_at: new Date().toISOString() };
+      const payload = { ...settings, agency_name: agencyName, agency_email: agencyEmail, agency_phone: agencyPhone, agency_website: agencyWebsite, agency_logo_url: agencyLogoUrl, calendar_type: calendarType, calendar_url: calendarUrl, default_niche: defaultNiche, default_location: defaultLocation, default_country: defaultCountry, ghl_pipeline_id: ghlPipelineId, slack_webhook_url: slackWebhookUrl, slack_channel_name: slackChannelName, slack_auto_post_leads: slackAutoPostLeads, slack_auto_post_playbooks: slackAutoPostPlaybooks, updated_at: new Date().toISOString() };
       const { data: existing } = await supabase.from('settings').select('id').limit(1).maybeSingle();
       if (existing) await supabase.from('settings').update(payload).eq('id', existing.id);
       else await supabase.from('settings').insert(payload);
@@ -151,6 +161,45 @@ export default function SettingsPage() {
           <div><label className="block text-xs font-mono text-prospex-muted mb-1.5">Default Country</label><input type="text" value={defaultCountry} onChange={(e) => setDefaultCountry(e.target.value)} placeholder="United Kingdom" className="input" /></div>
         </div>
         <div className="mt-4"><label className="block text-xs font-mono text-prospex-muted mb-1.5">GHL Pipeline ID</label><input type="text" value={ghlPipelineId} onChange={(e) => setGhlPipelineId(e.target.value)} placeholder="Pipeline ID" className="input" /></div>
+      </div>
+
+      {/* Slack Integration */}
+      <div className="card p-6 border-purple-500/30">
+        <h2 className="font-mono font-semibold text-purple-400 text-sm uppercase tracking-wider mb-1 flex items-center gap-2">
+          <MessageSquare className="w-4 h-4" />Slack Integration
+        </h2>
+        <p className="text-xs text-prospex-dim mb-4">Post qualified leads and playbooks to Slack automatically.</p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-mono text-prospex-muted mb-1.5">Slack Webhook URL</label>
+            <input type="url" value={slackWebhookUrl} onChange={(e) => setSlackWebhookUrl(e.target.value)} placeholder="https://hooks.slack.com/services/..." className="input" />
+            <p className="text-[10px] text-prospex-dim mt-1">Get this from Slack → Apps → Incoming Webhooks → Add New</p>
+          </div>
+          <div>
+            <label className="block text-xs font-mono text-prospex-muted mb-1.5">Channel Name (display only)</label>
+            <input type="text" value={slackChannelName} onChange={(e) => setSlackChannelName(e.target.value)} placeholder="#prospects" className="input" />
+          </div>
+          <div className="flex items-center gap-6">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={slackAutoPostLeads} onChange={(e) => setSlackAutoPostLeads(e.target.checked)} className="rounded border-prospex-border" />
+              <span className="text-xs font-mono text-prospex-muted">Auto-post qualified leads</span>
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={slackAutoPostPlaybooks} onChange={(e) => setSlackAutoPostPlaybooks(e.target.checked)} className="rounded border-prospex-border" />
+              <span className="text-xs font-mono text-prospex-muted">Auto-post playbooks</span>
+            </label>
+          </div>
+          <button onClick={async () => {
+            if (!slackWebhookUrl) { setSlackTestResult('error'); return; }
+            try {
+              const res = await fetch(slackWebhookUrl, { method: 'POST', body: JSON.stringify({ text: '✅ Prospex Slack connection test successful!' }) });
+              setSlackTestResult(res.ok ? 'success' : 'error');
+            } catch { setSlackTestResult('error'); }
+            setTimeout(() => setSlackTestResult(null), 3000);
+          }} className={cn('btn text-xs', slackTestResult === 'success' ? 'bg-prospex-green/20 text-prospex-green border-prospex-green/40' : slackTestResult === 'error' ? 'bg-prospex-red/20 text-prospex-red border-prospex-red/40' : 'bg-prospex-surface text-prospex-muted border-prospex-border')}>
+            {slackTestResult === 'success' ? <><Check className="w-3.5 h-3.5" /> Connected</> : slackTestResult === 'error' ? <><X className="w-3.5 h-3.5" /> Failed</> : <><Wifi className="w-3.5 h-3.5" /> Test Slack Connection</>}
+          </button>
+        </div>
       </div>
 
       <div className="p-4 bg-prospex-cyan/5 border border-prospex-cyan/20 rounded-lg flex items-start gap-3">
