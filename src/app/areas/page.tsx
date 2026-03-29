@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { Globe, Search, Play, Loader2, Check, Filter, ToggleLeft, ToggleRight, MapPin, TrendingUp, Users, Clock } from 'lucide-react';
+import { Globe, Search, Play, Loader2, Check, Filter, ToggleLeft, ToggleRight, MapPin, TrendingUp, Users, Clock, Crosshair, ChevronDown } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 
@@ -19,16 +19,38 @@ interface Area {
   active: boolean;
 }
 
+const PRESET_NICHES = [
+  'Aesthetic Clinic',
+  'Medspa / Medical Spa',
+  'Dental Practice',
+  'Dermatology Clinic',
+  'Cosmetic Surgery',
+  'Hair Salon',
+  'Beauty Salon',
+  'Wellness Spa',
+  'Physiotherapy',
+  'Chiropractor',
+];
+
 export default function AreasPage() {
   const [areas, setAreas] = useState<Area[]>([]);
   const [filtered, setFiltered] = useState<Area[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<string | null>(null);
+  const [scanProgress, setScanProgress] = useState<{ current: number; total: number; area: string } | null>(null);
   const [search, setSearch] = useState('');
   const [countryFilter, setCountryFilter] = useState<string>('all');
   const [tierFilter, setTierFilter] = useState<string>('all');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Niche state
+  const [niche, setNiche] = useState('Aesthetic Clinic');
+  const [customNiche, setCustomNiche] = useState('');
+  const [showNicheDropdown, setShowNicheDropdown] = useState(false);
+
+  const activeNiche = customNiche || niche;
+  const nicheQueryParam = encodeURIComponent(activeNiche.toLowerCase());
 
   const fetchAreas = useCallback(async () => {
     const { data } = await supabase
@@ -60,20 +82,27 @@ export default function AreasPage() {
     if (selected.size === 0) return;
     setScanning(true);
     setScanResult(null);
+    setScanProgress(null);
     try {
       const ids = Array.from(selected);
-      const results: Record<string, unknown>[] = [];
-      for (const id of ids) {
-        const res = await fetch(`/api/scan-areas?area_id=${id}`);
+      let totalFound = 0;
+      let totalQualified = 0;
+
+      for (let i = 0; i < ids.length; i++) {
+        const area = areas.find(a => a.id === ids[i]);
+        setScanProgress({ current: i + 1, total: ids.length, area: area?.area_name || 'Unknown' });
+        const res = await fetch(`/api/scan-areas?area_id=${ids[i]}&niche=${nicheQueryParam}`);
         const data = await res.json();
-        results.push(data);
+        totalFound += Number(data.total_found) || 0;
+        totalQualified += Number(data.qualified) || 0;
       }
-      const total = results.reduce((s, r) => s + (Number(r.total_found) || 0), 0);
-      const qualified = results.reduce((s, r) => s + (Number(r.qualified) || 0), 0);
-      setScanResult(`Scanned ${ids.length} areas — ${total} prospects found, ${qualified} qualified`);
+
+      setScanProgress(null);
+      setScanResult(`Scanned ${ids.length} areas for "${activeNiche}" — ${totalFound} prospects found, ${totalQualified} qualified`);
       setSelected(new Set());
       fetchAreas();
     } catch (err) {
+      setScanProgress(null);
       setScanResult(`Error: ${String(err)}`);
     }
     setScanning(false);
@@ -82,10 +111,11 @@ export default function AreasPage() {
   const handleScanBatch = async () => {
     setScanning(true);
     setScanResult(null);
+    setScanProgress(null);
     try {
-      const res = await fetch('/api/scan-areas?count=3');
+      const res = await fetch(`/api/scan-areas?count=3&niche=${nicheQueryParam}`);
       const data = await res.json();
-      setScanResult(`Scanned ${data.areas_scanned || 0} areas — ${data.total_found || 0} prospects, ${data.qualified || 0} qualified`);
+      setScanResult(`Scanned ${data.areas_scanned || 0} areas for "${activeNiche}" — ${data.total_found || 0} prospects, ${data.qualified || 0} qualified`);
       fetchAreas();
     } catch (err) {
       setScanResult(`Error: ${String(err)}`);
@@ -133,7 +163,7 @@ export default function AreasPage() {
             <Globe className="w-6 h-6 text-prospex-cyan" />
             Affluent Areas
           </h1>
-          <p className="text-sm text-prospex-muted mt-1 font-mono">215 premium areas • automated prospect scanning</p>
+          <p className="text-sm text-prospex-muted mt-1 font-mono">{totalAreas} premium areas • automated prospect scanning</p>
         </div>
         <div className="flex items-center gap-3">
           {selected.size > 0 && (
@@ -151,8 +181,80 @@ export default function AreasPage() {
         </div>
       </div>
 
+      {/* Niche Selector */}
+      <div className="p-4 rounded-lg bg-prospex-card border border-prospex-cyan/20">
+        <div className="flex items-center gap-2 mb-3">
+          <Crosshair className="w-4 h-4 text-prospex-cyan" />
+          <span className="text-xs font-mono text-prospex-cyan uppercase tracking-wider">Scan Niche / Industry</span>
+        </div>
+        <div className="flex items-center gap-3">
+          {/* Preset dropdown */}
+          <div className="relative">
+            <button onClick={() => setShowNicheDropdown(!showNicheDropdown)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-prospex-bg border border-prospex-border rounded-lg text-sm font-mono text-prospex-text hover:border-prospex-cyan/50 transition-colors min-w-[220px] justify-between">
+              <span>{customNiche ? 'Custom' : niche}</span>
+              <ChevronDown className={cn('w-4 h-4 text-prospex-dim transition-transform', showNicheDropdown && 'rotate-180')} />
+            </button>
+            {showNicheDropdown && (
+              <div className="absolute top-full left-0 mt-1 w-full bg-prospex-surface border border-prospex-border rounded-lg shadow-xl z-50 max-h-64 overflow-y-auto">
+                {PRESET_NICHES.map(preset => (
+                  <button key={preset} onClick={() => { setNiche(preset); setCustomNiche(''); setShowNicheDropdown(false); }}
+                    className={cn('w-full text-left px-4 py-2.5 text-sm font-mono hover:bg-prospex-bg transition-colors',
+                      niche === preset && !customNiche ? 'text-prospex-cyan bg-prospex-cyan/5' : 'text-prospex-muted')}>
+                    {preset}
+                  </button>
+                ))}
+                <div className="border-t border-prospex-border">
+                  <button onClick={() => { setShowNicheDropdown(false); }}
+                    className="w-full text-left px-4 py-2.5 text-sm font-mono text-prospex-amber hover:bg-prospex-bg transition-colors">
+                    Custom (type your own) ↓
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Custom niche input */}
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-prospex-dim" />
+            <input
+              type="text"
+              value={customNiche}
+              onChange={e => setCustomNiche(e.target.value)}
+              placeholder={`Using: "${niche}" — or type a custom niche here...`}
+              className="w-full pl-10 pr-4 py-2.5 bg-prospex-bg border border-prospex-border rounded-lg text-sm font-mono text-prospex-text placeholder:text-prospex-dim focus:border-prospex-cyan/50 focus:outline-none"
+            />
+          </div>
+
+          {/* Active niche indicator */}
+          <div className="px-3 py-2.5 bg-prospex-cyan/10 border border-prospex-cyan/30 rounded-lg shrink-0">
+            <span className="text-xs font-mono text-prospex-cyan">Scanning: <strong>{activeNiche}</strong></span>
+          </div>
+        </div>
+        <p className="text-[10px] font-mono text-prospex-dim mt-2">
+          Search query will be: &quot;{activeNiche.toLowerCase()} [area name]&quot; — e.g. &quot;{activeNiche.toLowerCase()} {areas[0]?.area_name || 'Mayfair'}&quot;
+        </p>
+      </div>
+
+      {/* Progress bar */}
+      {scanProgress && (
+        <div className="p-4 rounded-lg bg-prospex-cyan/5 border border-prospex-cyan/20">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-mono text-prospex-cyan flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Scanning {scanProgress.area}...
+            </span>
+            <span className="text-xs font-mono text-prospex-dim">{scanProgress.current}/{scanProgress.total}</span>
+          </div>
+          <div className="w-full h-2 bg-prospex-bg rounded-full overflow-hidden">
+            <div className="h-full bg-prospex-cyan rounded-full transition-all duration-500"
+              style={{ width: `${(scanProgress.current / scanProgress.total) * 100}%` }} />
+          </div>
+        </div>
+      )}
+
       {/* Scan result banner */}
-      {scanResult && (
+      {scanResult && !scanProgress && (
         <div className="p-3 rounded-lg bg-prospex-green/10 border border-prospex-green/30 text-prospex-green text-sm font-mono flex items-center gap-2">
           <Check className="w-4 h-4" /> {scanResult}
         </div>
@@ -210,6 +312,7 @@ export default function AreasPage() {
               <tr className="border-b border-prospex-border">
                 <th className="px-4 py-3 text-left text-[10px] font-mono uppercase tracking-wider text-prospex-dim">
                   <input type="checkbox" className="rounded border-prospex-border"
+                    checked={selected.size === filtered.length && filtered.length > 0}
                     onChange={e => {
                       if (e.target.checked) setSelected(new Set(filtered.map(a => a.id)));
                       else setSelected(new Set());
@@ -268,8 +371,9 @@ export default function AreasPage() {
             </tbody>
           </table>
         </div>
-        <div className="px-4 py-3 border-t border-prospex-border text-xs font-mono text-prospex-dim">
-          Showing {filtered.length} of {areas.length} areas
+        <div className="px-4 py-3 border-t border-prospex-border flex items-center justify-between text-xs font-mono text-prospex-dim">
+          <span>Showing {filtered.length} of {areas.length} areas</span>
+          {selected.size > 0 && <span className="text-prospex-cyan">{selected.size} selected</span>}
         </div>
       </div>
     </div>

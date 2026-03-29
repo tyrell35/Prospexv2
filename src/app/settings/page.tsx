@@ -76,7 +76,38 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true); setSaved(false);
     try {
-      const payload = { ...settings, agency_name: agencyName, agency_email: agencyEmail, agency_phone: agencyPhone, agency_website: agencyWebsite, agency_logo_url: agencyLogoUrl, calendar_type: calendarType, calendar_url: calendarUrl, default_niche: defaultNiche, default_location: defaultLocation, default_country: defaultCountry, ghl_pipeline_id: ghlPipelineId, slack_webhook_url: slackWebhookUrl, slack_channel_name: slackChannelName, slack_auto_post_leads: slackAutoPostLeads, slack_auto_post_playbooks: slackAutoPostPlaybooks, updated_at: new Date().toISOString() };
+      const payload: Record<string, unknown> = {
+        // API Keys (from fields array state)
+        outscraper_key: settings.outscraper_key || null,
+        apify_key: settings.apify_key || null,
+        firecrawl_key: settings.firecrawl_key || null,
+        openai_key: settings.openai_key || null,
+        dataforseo_login: settings.dataforseo_login || null,
+        dataforseo_password: settings.dataforseo_password || null,
+        ghl_key: settings.ghl_key || null,
+        ghl_location_id: settings.ghl_location_id || null,
+        anthropic_key: settings.anthropic_key || null,
+        // Agency Profile
+        agency_name: agencyName || null,
+        agency_email: agencyEmail || null,
+        agency_phone: agencyPhone || null,
+        agency_website: agencyWebsite || null,
+        agency_logo_url: agencyLogoUrl || null,
+        calendar_type: calendarType,
+        calendar_url: calendarUrl || null,
+        // Defaults
+        default_niche: defaultNiche || null,
+        default_location: defaultLocation || null,
+        default_country: defaultCountry || 'United Kingdom',
+        ghl_pipeline_id: ghlPipelineId || null,
+        // Slack Integration
+        slack_webhook_url: slackWebhookUrl || null,
+        slack_channel_name: slackChannelName || null,
+        slack_auto_post_leads: slackAutoPostLeads,
+        slack_auto_post_playbooks: slackAutoPostPlaybooks,
+        // Timestamp
+        updated_at: new Date().toISOString(),
+      };
       const { data: existing } = await supabase.from('settings').select('id').limit(1).maybeSingle();
       if (existing) await supabase.from('settings').update(payload).eq('id', existing.id);
       else await supabase.from('settings').insert(payload);

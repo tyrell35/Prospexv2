@@ -43,7 +43,7 @@ async function outscrapeSearch(query: string, lat?: number, lng?: number): Promi
 }
 
 // ─── PARSE OUTSCRAPER RESULT INTO LEAD ─────────────────────
-function parseResult(r: Record<string, unknown>, areaName: string, country: string): Record<string, unknown> | null {
+function parseResult(r: Record<string, unknown>, areaName: string, country: string, niche: string): Record<string, unknown> | null {
   const name = (r.name || r.business_name || '') as string;
   if (!name || name.length < 2) return null;
   return {
@@ -59,7 +59,7 @@ function parseResult(r: Record<string, unknown>, areaName: string, country: stri
     google_review_count: r.reviews ? Number(r.reviews) : null,
     google_maps_url: (r.google_maps_url || r.url || '') as string || null,
     source: 'google_maps',
-    niche: 'aesthetic clinic',
+    niche,
     area_source: areaName,
     pipeline_stage: 'new',
   };
@@ -101,6 +101,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const count = parseInt(searchParams.get('count') || '3', 10);
     const areaId = searchParams.get('area_id');
+    const nicheParam = searchParams.get('niche'); // Optional — overrides DB search terms
 
     // Get areas to scan — either specific ID or next in queue
     let areas;
@@ -132,7 +133,11 @@ export async function GET(request: NextRequest) {
     let totalDuplicates = 0;
 
     for (const area of areas) {
-      const searchTerms = [area.search_term_1, area.search_term_2, area.search_term_3].filter(Boolean);
+      // If niche override provided, use "[niche] [area_name]" instead of DB search terms
+      const nicheLabel = nicheParam || 'aesthetic clinic';
+      const searchTerms = nicheParam
+        ? [`${nicheParam} ${area.area_name}`]
+        : [area.search_term_1, area.search_term_2, area.search_term_3].filter(Boolean);
       const allLeads: Record<string, unknown>[] = [];
       const seenNames = new Set<string>();
 
@@ -140,7 +145,7 @@ export async function GET(request: NextRequest) {
       for (const term of searchTerms) {
         const rawResults = await outscrapeSearch(term!, area.latitude, area.longitude);
         for (const r of rawResults) {
-          const lead = parseResult(r, area.area_name, area.country);
+          const lead = parseResult(r, area.area_name, area.country, nicheLabel);
           if (!lead) continue;
           const nameKey = (lead.business_name as string).toLowerCase().trim();
           if (seenNames.has(nameKey)) continue;
@@ -211,6 +216,7 @@ export async function GET(request: NextRequest) {
       total_found: totalFound,
       qualified: totalQualified,
       duplicates_skipped: totalDuplicates,
+      niche: nicheParam || 'default (from database)',
       areas: results,
     });
   } catch (err) {
