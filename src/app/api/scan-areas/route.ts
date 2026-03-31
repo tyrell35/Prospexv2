@@ -31,47 +31,103 @@ function safeArray(data: unknown): Record<string, unknown>[] {
   return [];
 }
 
-// ─── OUTSCRAPER SEARCH — matches working scraper params ────
-async function outscrapeSearch(query: string, lat?: number | null, lng?: number | null): Promise<Record<string, unknown>[]> {
-  const key = getKey('OUTSCRAPER_API_KEY');
-  if (!key) {
-    console.error('[scan-areas] OUTSCRAPER_API_KEY not set');
-    return [];
+const FAILOVER_CODES = [402, 403, 429];
+
+// ─── GOOGLE MAPS SEARCH (Outscraper → Apify failover) ──────
+async function googleMapsSearch(query: string, lat?: number | null, lng?: number | null): Promise<{ items: Record<string, unknown>[]; provider: 'outscraper' | 'apify' }> {
+  // Try Outscraper first
+  const outscrapeKey = getKey('OUTSCRAPER_API_KEY');
+  if (outscrapeKey) {
+    try {
+      const items = await outscrapeSearchDirect(query, outscrapeKey, lat, lng);
+      return { items, provider: 'outscraper' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isFailover = FAILOVER_CODES.some(code => msg.includes(`${code}`));
+      if (isFailover) {
+        console.warn(`[scan-areas] Outscraper rate/billing error: ${msg} — failing over to Apify`);
+      } else {
+        console.error(`[scan-areas] Outscraper error (non-failover): ${msg}`);
+        return { items: [], provider: 'outscraper' };
+      }
+    }
   }
-  try {
-    const params = new URLSearchParams({
-      query,
-      limit: '50',
+
+  // Failover: Apify
+  const apifyKey = getKey('APIFY_API_TOKEN');
+  if (apifyKey) {
+    console.log(`[scan-areas] Using Apify fallback for "${query}"`);
+    const items = await apifySearchDirect(query, apifyKey, lat, lng);
+    return { items, provider: 'apify' };
+  }
+
+  console.error('[scan-areas] No scraping API available');
+  return { items: [], provider: 'outscraper' };
+}
+
+// ─── OUTSCRAPER DIRECT ──────────────────────────────────────
+async function outscrapeSearchDirect(query: string, key: string, lat?: number | null, lng?: number | null): Promise<Record<string, unknown>[]> {
+  const params = new URLSearchParams({
+    query, limit: '50', language: 'en', async: 'false',
+    dropDuplicates: 'true', extractContacts: 'true', enrichment: 'emails_and_contacts',
+  });
+  if (lat && lng) params.set('coordinates', `@${lat},${lng},14z`);
+
+  console.log(`[scan-areas] Outscraper query: "${query}" coords: ${lat},${lng}`);
+
+  const res = await fetch(`https://api.app.outscraper.com/maps/search-v3?${params}`, {
+    headers: { 'X-API-KEY': key },
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Outscraper error (${res.status}): ${errText.slice(0, 300)}`);
+  }
+
+  const rawData = await res.json();
+  const items = safeArray(rawData);
+  console.log(`[scan-areas] Outscraper returned ${items.length} raw items for "${query}"`);
+  return items;
+}
+
+// ─── APIFY DIRECT ───────────────────────────────────────────
+async function apifySearchDirect(query: string, key: string, lat?: number | null, lng?: number | null): Promise<Record<string, unknown>[]> {
+  const res = await fetch('https://api.apify.com/v2/acts/nwua9Gu5YrADL7ZDj/run-sync-get-dataset-items?token=' + key, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      searchStringsArray: [query],
+      maxCrawledPlacesPerSearch: 30,
       language: 'en',
-      async: 'false',
-      dropDuplicates: 'true',
-      extractContacts: 'true',
-      enrichment: 'emails_and_contacts',
-    });
-    if (lat && lng) {
-      params.set('coordinates', `@${lat},${lng},14z`);
-    }
+      ...(lat && lng ? { customGeolocation: { latitude: lat, longitude: lng, zoom: 14 } } : {}),
+    }),
+  });
 
-    console.log(`[scan-areas] Outscraper query: "${query}" coords: ${lat},${lng}`);
-
-    const res = await fetch(`https://api.app.outscraper.com/maps/search-v3?${params}`, {
-      headers: { 'X-API-KEY': key },
-    });
-
-    if (!res.ok) {
-      const errText = await res.text().catch(() => '');
-      console.error(`[scan-areas] Outscraper error ${res.status}: ${errText.slice(0, 300)}`);
-      return [];
-    }
-
-    const rawData = await res.json();
-    const items = safeArray(rawData);
-    console.log(`[scan-areas] Outscraper returned ${items.length} raw items for "${query}"`);
-    return items;
-  } catch (err) {
-    console.error('[scan-areas] Outscraper fetch error:', err);
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    console.error(`[scan-areas] Apify error (${res.status}): ${errText.slice(0, 300)}`);
     return [];
   }
+
+  const items = await res.json();
+  if (!Array.isArray(items)) return [];
+  console.log(`[scan-areas] Apify returned ${items.length} results for "${query}"`);
+
+  // Normalise Apify fields to match Outscraper field names
+  return items.map((item: Record<string, unknown>) => ({
+    name: item.title,
+    full_address: item.address,
+    city: item.city,
+    country: item.countryCode,
+    phone: item.phone || item.phoneUnformatted,
+    email: Array.isArray(item.emails) && item.emails.length > 0 ? item.emails[0] : null,
+    site: item.website,
+    rating: item.totalScore,
+    reviews: item.reviewsCount,
+    google_maps_url: item.url,
+    social_links: [],
+    _provider: 'apify',
+  }));
 }
 
 // ─── PARSE RESULT — matches working scraper's field mapping ─
@@ -169,7 +225,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ message: 'No areas to scan', areas_scanned: 0 });
     }
 
-    const results: { area_name: string; found: number; qualified: number; errors: string[] }[] = [];
+    const results: { area_name: string; found: number; qualified: number; provider: string; errors: string[] }[] = [];
     let totalFound = 0;
     let totalQualified = 0;
     let totalDuplicates = 0;
@@ -185,14 +241,16 @@ export async function GET(request: NextRequest) {
 
       const allLeads: Record<string, unknown>[] = [];
       const seenNames = new Set<string>();
+      let provider: 'outscraper' | 'apify' = 'outscraper';
 
       // Search with each term
       for (const term of searchTerms) {
-        const rawResults = await outscrapeSearch(
+        const { items: rawResults, provider: p } = await googleMapsSearch(
           term,
           area.latitude as number | null,
           area.longitude as number | null
         );
+        provider = p;
 
         for (const item of rawResults) {
           const lead = parseResult(item, area.area_name as string, area.country as string, nicheLabel);
@@ -281,6 +339,7 @@ export async function GET(request: NextRequest) {
         area_name: area.area_name as string,
         found: newLeads.length,
         qualified: areaQualified,
+        provider,
         errors: areaErrors,
       });
     }

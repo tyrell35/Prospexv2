@@ -18,7 +18,10 @@ interface LeadResult {
   google_review_count: number | null;
   google_maps_url: string | null;
   source: string;
+  source_provider?: 'outscraper' | 'apify' | null;
 }
+
+const FAILOVER_CODES = [402, 403, 429];
 
 // ─── HELPERS ───────────────────────────────────────────────────
 function safeArray(data: unknown): Record<string, unknown>[] {
@@ -86,31 +89,50 @@ async function firecrawlScrape(url: string, waitMs: number = 3000): Promise<{ ht
   }
 }
 
-// ─── GOOGLE MAPS (Outscraper) ──────────────────────────────────
+// ─── GOOGLE MAPS (Outscraper → Apify failover) ─────────────────
 async function scrapeGoogleMaps(niche: string, location: string, country: string, lat?: number, lng?: number): Promise<LeadResult[]> {
-  const apiKey = getKey('OUTSCRAPER_API_KEY');
-  if (!apiKey) throw new Error('Outscraper API key not configured. Add it in Settings.');
+  // Try Outscraper first
+  const outscrapeKey = getKey('OUTSCRAPER_API_KEY');
+  if (outscrapeKey) {
+    try {
+      const results = await scrapeGoogleMapsOutscraper(niche, location, country, outscrapeKey, lat, lng);
+      console.log(`[scrape] Outscraper returned ${results.length} results for "${niche}" in "${location}"`);
+      return results;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isFailoverError = FAILOVER_CODES.some(code => msg.includes(`(${code})`));
+      if (isFailoverError) {
+        console.warn(`[scrape] Outscraper failed with rate/billing error: ${msg} — failing over to Apify`);
+      } else {
+        throw err; // Non-failover errors bubble up normally
+      }
+    }
+  }
 
+  // Failover: try Apify
+  const apifyKey = getKey('APIFY_API_TOKEN');
+  if (apifyKey) {
+    console.log(`[scrape] Using Apify fallback for "${niche}" in "${location}"`);
+    return scrapeGoogleMapsApify(niche, location, country, apifyKey, lat, lng);
+  }
+
+  throw new Error('Both Outscraper and Apify failed or are not configured.');
+}
+
+// ─── OUTSCRAPER IMPLEMENTATION ──────────────────────────────────
+async function scrapeGoogleMapsOutscraper(niche: string, location: string, country: string, apiKey: string, lat?: number, lng?: number): Promise<LeadResult[]> {
   const regionMap: Record<string, string> = {
     'United States': 'us', 'United Kingdom': 'gb', 'Canada': 'ca', 'Australia': 'au',
     'Ireland': 'ie', 'Germany': 'de', 'France': 'fr', 'Spain': 'es', 'Italy': 'it', 'Netherlands': 'nl',
   };
   const region = regionMap[country] || 'gb';
-
-  // Use coordinates for precise geo-targeting when available
-  const query = lat && lng
-    ? `${niche} near ${location}`
-    : `${niche}, ${location}, ${country}`;
+  const query = lat && lng ? `${niche} near ${location}` : `${niche}, ${location}, ${country}`;
 
   const params = new URLSearchParams({
     query, limit: '50', region, language: 'en', async: 'false',
     dropDuplicates: 'true', extractContacts: 'true', enrichment: 'emails_and_contacts',
   });
-
-  // Add coordinates for precise location targeting
-  if (lat && lng) {
-    params.set('coordinates', `@${lat},${lng},14z`);
-  }
+  if (lat && lng) params.set('coordinates', `@${lat},${lng},14z`);
 
   const response = await fetch(`https://api.app.outscraper.com/maps/search-v3?${params}`, {
     headers: { 'X-API-KEY': apiKey },
@@ -146,10 +168,67 @@ async function scrapeGoogleMaps(niche: string, location: string, country: string
       google_review_count: typeof item.reviews === 'number' ? item.reviews : (typeof item.reviews_count === 'number' ? item.reviews_count : null),
       google_maps_url: item.google_maps_url ? String(item.google_maps_url) : null,
       source: 'google_maps',
+      source_provider: 'outscraper',
     };
   });
 
-  // Location filter — only keep results actually in the searched location
+  const loc = location.toLowerCase().trim();
+  const filtered = mapped.filter(r => {
+    const addr = (r.address || '').toLowerCase();
+    const city = (r.city || '').toLowerCase();
+    return addr.includes(loc) || city.includes(loc) || city === loc;
+  });
+  return (filtered.length > 0 ? filtered : mapped).slice(0, 30);
+}
+
+// ─── APIFY GOOGLE MAPS SCRAPER (failover) ───────────────────────
+async function scrapeGoogleMapsApify(niche: string, location: string, country: string, apiKey: string, lat?: number, lng?: number): Promise<LeadResult[]> {
+  const query = lat && lng ? `${niche} near ${location}` : `${niche}, ${location}, ${country}`;
+
+  // Run the Apify Google Maps Scraper actor synchronously
+  const response = await fetch('https://api.apify.com/v2/acts/nwua9Gu5YrADL7ZDj/run-sync-get-dataset-items?token=' + apiKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      searchStringsArray: [query],
+      maxCrawledPlacesPerSearch: 30,
+      language: 'en',
+      ...(lat && lng ? { customGeolocation: { latitude: lat, longitude: lng, zoom: 14 } } : {}),
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`Apify error (${response.status}): ${errText.slice(0, 200)}`);
+  }
+
+  const items = await response.json();
+  if (!Array.isArray(items)) return [];
+
+  console.log(`[scrape] Apify returned ${items.length} results for "${query}"`);
+
+  const mapped: LeadResult[] = items.filter((item: Record<string, unknown>) => item.title).map((item: Record<string, unknown>) => {
+    const phoneRaw = item.phone || item.phoneUnformatted;
+    const website = item.website || item.url;
+    const emails = Array.isArray(item.emails) ? item.emails : [];
+
+    return {
+      business_name: String(item.title || 'Unknown'),
+      address: item.address ? String(item.address) : null,
+      city: item.city ? String(item.city) : location,
+      country: item.countryCode ? String(item.countryCode) : country,
+      phone: phoneRaw ? String(phoneRaw) : null,
+      email: emails.length > 0 ? String(emails[0]) : null,
+      website: website ? String(website) : null,
+      instagram_url: null,
+      google_rating: typeof item.totalScore === 'number' ? item.totalScore : null,
+      google_review_count: typeof item.reviewsCount === 'number' ? item.reviewsCount : null,
+      google_maps_url: item.url ? String(item.url) : null,
+      source: 'google_maps',
+      source_provider: 'apify' as const,
+    };
+  });
+
   const loc = location.toLowerCase().trim();
   const filtered = mapped.filter(r => {
     const addr = (r.address || '').toLowerCase();
