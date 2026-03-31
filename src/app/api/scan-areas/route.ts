@@ -167,30 +167,57 @@ function parseResult(item: Record<string, unknown>, areaName: string, country: s
 }
 
 // ─── QUALIFICATION SCORE ───────────────────────────────────
-function calculateQualificationScore(lead: Record<string, unknown>, tier: number): number {
+function calculateQualificationScore(lead: Record<string, unknown>, tier: number): { score: number; breakdown: string } {
   let score = 0;
+  const checks: string[] = [];
+  const name = String(lead.business_name || '?');
   const rating = lead.google_rating as number | null;
   const reviews = lead.google_review_count as number | null;
+  const hasWebsite = !!(lead.website && String(lead.website).length > 5);
+  const hasEmail = !!(lead.email && String(lead.email).includes('@'));
+  const hasPhone = !!(lead.phone && String(lead.phone).length >= 7);
 
-  if (rating && rating >= 4.5) score += 10;
-  else if (rating && rating >= 4.0) score += 5;
-
-  if (reviews && reviews >= 100) score += 10;
-  else if (reviews && reviews >= 50) score += 5;
-
-  if (lead.website) score += 5;
-  if (lead.email) score += 10;
-  if (lead.phone) score += 5;
+  // Base: every lead in an affluent area gets 25 points
+  score += 25;
+  checks.push('base:+25');
 
   // Tier bonus
-  if (tier === 1) score += 10;
-  else if (tier === 2) score += 7;
-  else score += 5;
+  if (tier === 1) { score += 10; checks.push('tier1:+10'); }
+  else if (tier === 2) { score += 7; checks.push('tier2:+7'); }
+  else { score += 5; checks.push('tier3:+5'); }
 
-  // Base score for being in an affluent area
-  score += 20;
+  // Rating
+  if (rating && rating >= 4.5) { score += 10; checks.push(`rating(${rating}):+10`); }
+  else if (rating && rating >= 4.0) { score += 7; checks.push(`rating(${rating}):+7`); }
+  else if (rating && rating >= 3.0) { score += 3; checks.push(`rating(${rating}):+3`); }
+  else { checks.push(`rating(${rating ?? 'none'}):+0`); }
 
-  return Math.min(score, 100);
+  // Reviews
+  if (reviews && reviews >= 100) { score += 10; checks.push(`reviews(${reviews}):+10`); }
+  else if (reviews && reviews >= 30) { score += 7; checks.push(`reviews(${reviews}):+7`); }
+  else if (reviews && reviews >= 10) { score += 5; checks.push(`reviews(${reviews}):+5`); }
+  else if (reviews && reviews > 0) { score += 2; checks.push(`reviews(${reviews}):+2`); }
+  else { checks.push('reviews(0):+0'); }
+
+  // Contact info — require website OR phone, email is a bonus
+  if (hasWebsite) { score += 8; checks.push('website:+8'); }
+  else { checks.push('website:+0'); }
+
+  if (hasPhone) { score += 8; checks.push('phone:+8'); }
+  else { checks.push('phone:+0'); }
+
+  if (hasEmail) { score += 7; checks.push('email:+7'); }
+  else { checks.push('email(none):+0'); }
+
+  // Has at least one way to reach them (website or phone)
+  if (hasWebsite || hasPhone) { score += 5; checks.push('reachable:+5'); }
+  else { checks.push('reachable:+0 (NO CONTACT METHOD)'); }
+
+  const finalScore = Math.min(score, 100);
+  const verdict = finalScore >= 40 ? 'QUALIFIED' : 'REJECTED';
+  const breakdown = `[${verdict}] ${name}: ${finalScore}/100 — ${checks.join(', ')}`;
+
+  return { score: finalScore, breakdown };
 }
 
 // ─── MAIN HANDLER ──────────────────────────────────────────
@@ -285,12 +312,13 @@ export async function GET(request: NextRequest) {
 
       console.log(`[scan-areas] ${area.area_name}: ${newLeads.length} new leads after dedup (${allLeads.length - newLeads.length} duplicates)`);
 
-      // Score and save qualified leads — using SAME insert format as working scraper PUT handler
+      // Score and save qualified leads
       let areaQualified = 0;
       for (const lead of newLeads) {
-        const qualScore = calculateQualificationScore(lead, area.affluent_tier as number);
+        const { score: qualScore, breakdown } = calculateQualificationScore(lead, area.affluent_tier as number);
+        console.log(`[scan-areas] ${breakdown}`);
 
-        if (qualScore >= 50) {
+        if (qualScore >= 40) {
           const insertPayload = {
             business_name: lead.business_name,
             niche: lead.niche || nicheLabel,

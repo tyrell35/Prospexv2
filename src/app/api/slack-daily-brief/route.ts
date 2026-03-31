@@ -18,14 +18,21 @@ export async function GET() {
       return NextResponse.json({ error: 'Slack webhook not configured' }, { status: 400 });
     }
 
-    // Get today's qualified leads
+    // Get today's qualified leads (score >= 40 matches scan-areas threshold)
     const today = new Date().toISOString().split('T')[0];
     const { data: todayLeads } = await supabase
       .from('leads')
       .select('*')
       .gte('created_at', `${today}T00:00:00`)
-      .gte('qualification_score', 50)
+      .gte('qualification_score', 40)
       .order('qualification_score', { ascending: false });
+
+    // Get today's total leads (any score, from area scans)
+    const { count: todayTotalCount } = await supabase
+      .from('leads')
+      .select('*', { count: 'exact', head: true })
+      .gte('created_at', `${today}T00:00:00`)
+      .not('area_source', 'is', null);
 
     // Get this week's scan stats
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
@@ -34,10 +41,12 @@ export async function GET() {
       .select('leads_found, qualified_leads')
       .gte('created_at', weekAgo);
 
-    const weekTotal = (weekScans || []).reduce((sum, s) => sum + (s.qualified_leads || 0), 0);
+    const weekQualified = (weekScans || []).reduce((sum, s) => sum + (s.qualified_leads || 0), 0);
+    const weekFound = (weekScans || []).reduce((sum, s) => sum + (s.leads_found || 0), 0);
 
     // Build message
     const leads = todayLeads || [];
+    const totalToday = todayTotalCount || 0;
     const dateStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 
     const blocks: Record<string, unknown>[] = [
@@ -49,7 +58,7 @@ export async function GET() {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*${leads.length} qualified prospects* found today\n📊 Weekly progress: *${weekTotal}/30 target*`,
+          text: `*${leads.length} qualified prospects* from ${totalToday} total found today\n📊 Weekly: *${weekQualified} qualified* from ${weekFound} found | Target: 30/week`,
         },
       },
       { type: 'divider' },
