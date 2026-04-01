@@ -592,21 +592,15 @@ async function sendHumanMessage(body: Record<string, unknown>) {
     content: content as string,
   });
 
+  // Read current counts, then increment + update in one call
+  const { data: conv } = await supabase.from('conversations').select('human_messages_sent, total_messages').eq('id', conversation_id as string).single();
   await supabase.from('conversations').update({
-    human_messages_sent: supabase.rpc ? undefined : 1, // Increment handled below
+    human_messages_sent: ((conv?.human_messages_sent as number) || 0) + 1,
+    total_messages: ((conv?.total_messages as number) || 0) + 1,
     last_message_at: new Date().toISOString(),
     last_message_preview: (content as string).slice(0, 100),
     updated_at: new Date().toISOString(),
   }).eq('id', conversation_id as string);
-
-  // Increment human_messages_sent
-  const { data: conv } = await supabase.from('conversations').select('human_messages_sent, total_messages').eq('id', conversation_id as string).single();
-  if (conv) {
-    await supabase.from('conversations').update({
-      human_messages_sent: ((conv.human_messages_sent as number) || 0) + 1,
-      total_messages: ((conv.total_messages as number) || 0) + 1,
-    }).eq('id', conversation_id as string);
-  }
 
   return NextResponse.json({ success: true });
 }
