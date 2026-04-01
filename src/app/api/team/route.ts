@@ -61,67 +61,80 @@ async function inviteMember(body: Record<string, unknown>) {
     }, { status: 500 });
   }
 
-  // Check if already a member
+  const emailLower = (email as string).toLowerCase().trim();
+
+  // Check if already a team member
   const { data: existing } = await supabase
     .from('team_members')
     .select('id')
-    .eq('email', (email as string).toLowerCase())
+    .eq('email', emailLower)
     .maybeSingle();
 
   if (existing) {
     return NextResponse.json({ error: 'This person is already a team member' }, { status: 400 });
   }
 
-  // Invite via Supabase Auth (sends magic link email)
-  const { data: authData, error: authError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
-    (email as string).toLowerCase(),
-    {
-      data: {
-        full_name: full_name || '',
-        role: role || 'member',
-      },
-      redirectTo: `${process.env.NEXT_PUBLIC_APP_URL || 'https://prospexv2.vercel.app'}/auth/callback`,
-    }
-  );
+  // Try to invite via Supabase Auth
+  let userId: string | null = null;
 
-  if (authError) {
-    // If user already exists in auth but not in team_members, add them
-    if (authError.message.includes('already been registered') || authError.message.includes('already exists')) {
-      // Find the existing auth user
-      const { data: users } = await supabaseAdmin.auth.admin.listUsers();
-      const existingUser = users?.users?.find(u => u.email === (email as string).toLowerCase());
-
-      if (existingUser) {
-        // Add to team_members
-        const { error: insertError } = await supabase.from('team_members').insert({
-          user_id: existingUser.id,
-          email: (email as string).toLowerCase(),
-          full_name: (full_name as string) || existingUser.user_metadata?.full_name || '',
-          role: (role as string) || 'member',
-          is_active: true,
-        });
-
-        if (insertError) throw new Error(insertError.message);
-        return NextResponse.json({ success: true, message: 'Existing user added to team' });
+  try {
+    const { data: authData, error: authError } = await supabaseAdmin.auth.admin.inviteUserByEmail(
+      emailLower,
+      {
+        data: {
+          full_name: full_name || '',
+          role: role || 'member',
+        },
       }
+    );
+
+    if (authError) {
+      // User might already exist in auth but not in team_members
+      if (authError.message?.includes('already') || authError.message?.includes('exists')) {
+        const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
+        const found = usersData?.users?.find((u: { email?: string }) => u.email === emailLower);
+        userId = found?.id || null;
+      } else {
+        throw new Error(authError.message || 'Auth invite failed');
+      }
+    } else {
+      userId = authData?.user?.id || null;
     }
-    throw new Error(`Invite failed: ${authError.message}`);
+  } catch (err: unknown) {
+    // If invite fails, still try to look up existing auth user
+    try {
+      const { data: usersData } = await supabaseAdmin.auth.admin.listUsers();
+      const found = usersData?.users?.find((u: { email?: string }) => u.email === emailLower);
+      userId = found?.id || null;
+      if (!userId) {
+        const message = err instanceof Error ? err.message : 'Invite failed';
+        throw new Error(message);
+      }
+    } catch (innerErr: unknown) {
+      const message = innerErr instanceof Error ? innerErr.message : 'Invite failed';
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
   }
 
   // Add to team_members table
-  const { error: insertError } = await supabase.from('team_members').insert({
-    user_id: authData?.user?.id || null,
-    email: (email as string).toLowerCase(),
-    full_name: (full_name as string) || '',
-    role: (role as string) || 'member',
-    is_active: true,
-  });
+  try {
+    const { error: insertError } = await supabase.from('team_members').insert({
+      user_id: userId,
+      email: emailLower,
+      full_name: (full_name as string) || '',
+      role: (role as string) || 'member',
+      is_active: true,
+    });
 
-  if (insertError) throw new Error(insertError.message);
+    if (insertError) throw new Error(insertError.message);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to add team member';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 
   return NextResponse.json({
     success: true,
-    message: `Invite sent to ${email}. They'll receive an email to set up their account.`,
+    message: `Invite sent to ${emailLower}. They'll receive an email to set up their account.`,
   });
 }
 
