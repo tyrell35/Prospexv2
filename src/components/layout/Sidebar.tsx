@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Database, Search, Settings, Crosshair, FileText, BarChart3, Columns3, Upload, TrendingUp, MapPin, Eye, BookOpen, Brain, Activity, Zap, MessageSquare, Rocket, Globe, ScrollText } from 'lucide-react';
+import { LayoutDashboard, Database, Search, Settings, Crosshair, FileText, BarChart3, Columns3, Upload, TrendingUp, MapPin, Eye, BookOpen, Brain, Activity, Zap, MessageSquare, Rocket, Globe, ScrollText, Bot, Users } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigation = [
@@ -24,6 +24,8 @@ const navigation = [
   { name: 'Pipeline', href: '/pipeline', icon: Columns3 },
   { name: 'Pitches', href: '/pitch', icon: FileText },
   { name: 'Playbooks', href: '/playbooks', icon: ScrollText },
+  { name: 'AI Agent', href: '/ai-agent', icon: Bot },
+  { name: 'Team', href: '/team', icon: Users },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
   { name: 'Settings', href: '/settings', icon: Settings },
 ];
