@@ -18,13 +18,14 @@ export async function GET() {
       return NextResponse.json({ error: 'Slack webhook not configured' }, { status: 400 });
     }
 
-    // Get today's qualified leads (score >= 40 matches scan-areas threshold)
+    // Get today's qualified leads that haven't been posted yet (null or false)
     const today = new Date().toISOString().split('T')[0];
     const { data: todayLeads } = await supabase
       .from('leads')
       .select('*')
       .gte('created_at', `${today}T00:00:00`)
       .gte('qualification_score', 40)
+      .or('slack_posted.is.null,slack_posted.eq.false')
       .order('qualification_score', { ascending: false });
 
     // Get today's total leads (any score, from area scans)
@@ -95,11 +96,20 @@ export async function GET() {
       elements: [{ type: 'mrkdwn', text: `Prospex Daily Brief • Auto-generated at ${new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` }],
     });
 
-    await fetch(settings.slack_webhook_url, {
+    const slackRes = await fetch(settings.slack_webhook_url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ blocks }),
     });
+
+    // Mark leads as posted so they don't get re-sent on subsequent runs
+    if (slackRes.ok && leads.length > 0) {
+      const leadIds = leads.map(l => l.id);
+      await supabase
+        .from('leads')
+        .update({ slack_posted: true })
+        .in('id', leadIds);
+    }
 
     return NextResponse.json({ success: true, leads_posted: leads.length });
   } catch (err) {
