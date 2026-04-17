@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Shield } from 'lucide-react';
+import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Zap, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigation = [
@@ -10,17 +10,18 @@ const navigation = [
   { name: 'Instagram Scraper', href: '/instagram-scrape', icon: Camera },
   { name: 'Lead Database', href: '/leads', icon: Database },
   { name: 'Scrape History', href: '/scrape-history', icon: History },
+  { name: 'Pitch Generator', href: '/pitch', icon: Zap },
   { name: 'Outreach Coach', href: '/outreach-coach', icon: GraduationCap },
   { name: 'Conversations', href: '/conversations', icon: MessageCircle },
   { name: 'AI Agent', href: '/ai-agent', icon: Bot },
   { name: 'Team', href: '/team', icon: Users },
+  { name: 'Settings', href: '/settings', icon: Settings },
 ];
 
 const comingSoon = [
   { label: 'Email Campaigns', icon: Mail },
   { label: 'Email Accounts', icon: Inbox },
   { label: 'Market Analysis', icon: BarChart3 },
-  { label: 'Deep Audit', icon: Shield },
 ];
 
 export default function Sidebar() {
