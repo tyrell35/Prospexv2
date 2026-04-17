@@ -301,7 +301,12 @@ export async function POST(req: NextRequest) {
           // Social profiles (proper href extraction)
           const socials = extractSocialProfiles(html);
           updates.social_profiles = socials;
-          updates.has_social = Object.keys(socials).length > 0;
+          // Don't demote a lead from has_social:true — only upgrade, or set true if genuinely found
+          if (Object.keys(socials).length > 0) {
+            updates.has_social = true;
+          } else if (!lead.has_social && !lead.instagram_url) {
+            updates.has_social = false;
+          }
 
           // Instagram — waterfall: use extracted href over existing
           if (socials.instagram) {
@@ -439,7 +444,11 @@ export async function GET(req: NextRequest) {
               updates.has_booking = techStack.some((t: TechItem) => t.category === 'booking');
               const socials = extractSocialProfiles(html);
               updates.social_profiles = socials;
-              updates.has_social = Object.keys(socials).length > 0;
+              if (Object.keys(socials).length > 0) {
+                updates.has_social = true;
+              } else if (!lead.has_social && !lead.instagram_url) {
+                updates.has_social = false;
+              }
               if (socials.instagram) {
                 updates.instagram_url = socials.instagram;
                 updates.instagram_handle = socials.instagram.replace(/^https?:\/\/(?:www\.)?instagram\.com\//, '').replace(/\/$/, '');

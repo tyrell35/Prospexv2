@@ -24,6 +24,8 @@ import {
   Shield,
   Check,
   RefreshCw,
+  Clock,
+  Trash2,
 } from 'lucide-react';
 import { cn, getScoreColor } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
@@ -114,6 +116,40 @@ export default function MarketAnalysisPage() {
   const [auditedLeads, setAuditedLeads] = useState<Set<string>>(new Set());
   const [savingAll, setSavingAll] = useState(false);
   const [allSaved, setAllSaved] = useState(false);
+
+  const [history, setHistory] = useState<Array<{ id: string; niche: string; location: string; country: string | null; total_businesses: number | null; created_at: string; market_data: MarketAnalysis }>>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const loadHistory = async () => {
+    setHistoryLoading(true);
+    const { data } = await supabase
+      .from('market_analyses')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(20);
+    setHistory(data || []);
+    setShowHistory(true);
+    setHistoryLoading(false);
+  };
+
+  const openFromHistory = (item: { market_data: MarketAnalysis }) => {
+    if (!item.market_data) return;
+    setAnalysis(item.market_data);
+    setNiche(item.market_data.niche || '');
+    setLocation(item.market_data.location || '');
+    setCountry(item.market_data.country || 'United Kingdom');
+    setSavedLeads(new Set());
+    setAuditedLeads(new Set());
+    setAllSaved(false);
+    setShowHistory(false);
+    setError(null);
+  };
+
+  const deleteFromHistory = async (id: string) => {
+    await supabase.from('market_analyses').delete().eq('id', id);
+    setHistory(prev => prev.filter(h => h.id !== id));
+  };
 
   const handleAnalyze = async () => {
     if (!niche || !location) return;
@@ -232,13 +268,62 @@ export default function MarketAnalysisPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-2xl font-mono font-bold text-prospex-text flex items-center gap-3">
-          <BarChart3 className="w-7 h-7 text-prospex-cyan" />
-          Market Analysis
-        </h1>
-        <p className="text-sm text-prospex-dim mt-1">Analyze the competitive landscape for any niche + location</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-mono font-bold text-prospex-text flex items-center gap-3">
+            <BarChart3 className="w-7 h-7 text-prospex-cyan" />
+            Market Analysis
+          </h1>
+          <p className="text-sm text-prospex-dim mt-1">Analyze the competitive landscape for any niche + location</p>
+        </div>
+        <button
+          onClick={loadHistory}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg border border-prospex-border bg-prospex-surface hover:bg-prospex-bg text-prospex-text text-sm font-mono"
+        >
+          <Clock className="w-4 h-4" /> History
+        </button>
       </div>
+
+      {showHistory && (
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-mono font-bold text-prospex-text uppercase tracking-wider flex items-center gap-2">
+              <Clock className="w-4 h-4 text-prospex-cyan" /> Past Analyses
+            </h2>
+            <button onClick={() => setShowHistory(false)} className="text-xs text-prospex-dim hover:text-prospex-text">Close</button>
+          </div>
+          {historyLoading ? (
+            <div className="text-sm text-prospex-dim py-6 text-center">Loading history…</div>
+          ) : history.length === 0 ? (
+            <div className="text-sm text-prospex-dim py-6 text-center">No past analyses yet. Run one above to save it.</div>
+          ) : (
+            <div className="divide-y divide-prospex-border">
+              {history.map(item => (
+                <div key={item.id} className="flex items-center justify-between gap-3 py-3">
+                  <button
+                    onClick={() => openFromHistory(item)}
+                    className="flex-1 text-left hover:bg-prospex-bg rounded px-2 py-1 -mx-2"
+                  >
+                    <div className="font-mono font-semibold text-sm text-prospex-text">
+                      {item.niche} <span className="text-prospex-dim">·</span> {item.location}
+                    </div>
+                    <div className="text-xs text-prospex-dim mt-0.5">
+                      {item.total_businesses ?? 0} businesses · {new Date(item.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })} {new Date(item.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => deleteFromHistory(item.id)}
+                    className="p-2 rounded-lg text-prospex-dim hover:text-red-400 hover:bg-red-500/10"
+                    title="Delete this analysis"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="card p-6">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

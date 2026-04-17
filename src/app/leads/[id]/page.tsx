@@ -88,6 +88,7 @@ export default function LeadDetailPage() {
   const [playbook, setPlaybook] = useState<Record<string, unknown> | null>(null);
   const [playbookLoading, setPlaybookLoading] = useState(false);
   const [playbookExpanded, setPlaybookExpanded] = useState(false);
+  const [pitches, setPitches] = useState<Array<{ id: string; pitch_type: string | null; title: string | null; created_at: string; status: string | null }>>([]);
   const [copied, setCopied] = useState<string | null>(null);
 
   const fetchLead = async () => {
@@ -131,6 +132,14 @@ export default function LeadDetailPage() {
         .limit(1)
         .maybeSingle();
       setPlaybook(pbData as Record<string, unknown> | null);
+
+      // Fetch pitches for this lead
+      const { data: pitchData } = await supabase
+        .from('pitches')
+        .select('id, pitch_type, title, created_at, status')
+        .eq('lead_id', leadId)
+        .order('created_at', { ascending: false });
+      setPitches(pitchData || []);
     } catch (error) {
       console.error('Failed to fetch lead:', error);
     } finally {
@@ -306,18 +315,36 @@ export default function LeadDetailPage() {
               Push to GHL
             </button>
           )}
-          {/* Generate Playbook */}
-          {!playbook && (
-            <button onClick={handleGeneratePlaybook} disabled={playbookLoading} className="btn text-xs bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/40 hover:bg-prospex-cyan/30">
-              {playbookLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScrollText className="w-3.5 h-3.5" />}
-              {playbookLoading ? 'Generating...' : 'Generate Playbook'}
-            </button>
-          )}
-          {playbook && (
-            <span className="badge bg-prospex-green/20 text-prospex-green border-prospex-green/40">
-              <ScrollText className="w-3 h-3" /> Playbook Ready
-            </span>
-          )}
+          {/* Playbook status + action */}
+          {(() => {
+            const status = ((lead as unknown as { playbook_status?: string }).playbook_status) || (playbook ? 'ready' : 'none');
+            if (playbookLoading || status === 'generating') {
+              return (
+                <span className="badge bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/40">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Generating…
+                </span>
+              );
+            }
+            if (status === 'ready' && playbook) {
+              return (
+                <button onClick={() => { setPlaybookExpanded(true); setTimeout(() => document.getElementById('playbook-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50); }} className="btn text-xs bg-prospex-green/20 text-prospex-green border border-prospex-green/40 hover:bg-prospex-green/30">
+                  <ScrollText className="w-3.5 h-3.5" /> View Playbook
+                </button>
+              );
+            }
+            if (status === 'failed') {
+              return (
+                <button onClick={handleGeneratePlaybook} className="btn text-xs bg-prospex-red/20 text-prospex-red border border-prospex-red/40 hover:bg-prospex-red/30">
+                  <RefreshCw className="w-3.5 h-3.5" /> Retry Playbook
+                </button>
+              );
+            }
+            return (
+              <button onClick={handleGeneratePlaybook} className="btn text-xs bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/40 hover:bg-prospex-cyan/30">
+                <ScrollText className="w-3.5 h-3.5" /> Generate Playbook
+              </button>
+            );
+          })()}
           <button onClick={handleDelete} className="btn-danger text-xs">
             <Trash2 className="w-3.5 h-3.5" />
           </button>
@@ -505,7 +532,7 @@ export default function LeadDetailPage() {
         </div>
       )}
       {playbook && (
-        <div className="card p-6 border-prospex-cyan/30">
+        <div id="playbook-section" className="card p-6 border-prospex-cyan/30">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-mono font-semibold text-prospex-text flex items-center gap-2">
               <ScrollText className="w-5 h-5 text-prospex-cyan" />
@@ -596,6 +623,38 @@ export default function LeadDetailPage() {
               <pre className="text-xs font-mono text-prospex-muted whitespace-pre-wrap leading-relaxed">{String(playbook.content || '')}</pre>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Pitches */}
+      {pitches.length > 0 && (
+        <div className="card p-6">
+          <h2 className="font-mono font-semibold text-prospex-text mb-4 flex items-center gap-2">
+            <ScrollText className="w-5 h-5 text-prospex-cyan" />
+            Pitches <span className="text-xs text-prospex-dim font-normal">({pitches.length})</span>
+          </h2>
+          <div className="divide-y divide-prospex-border">
+            {pitches.map(p => (
+              <Link
+                key={p.id}
+                href={`/pitch/${p.id}`}
+                className="flex items-center justify-between py-3 px-2 -mx-2 rounded hover:bg-prospex-bg"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-mono text-prospex-text truncate">
+                    {p.title || p.pitch_type || 'Pitch'}
+                  </div>
+                  <div className="text-[11px] text-prospex-dim mt-0.5">
+                    {p.pitch_type ? <span className="uppercase tracking-wider mr-2">{p.pitch_type}</span> : null}
+                    {new Date(p.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </div>
+                </div>
+                {p.status && (
+                  <span className="badge text-[10px] bg-prospex-bg border border-prospex-border text-prospex-muted">{p.status}</span>
+                )}
+              </Link>
+            ))}
+          </div>
         </div>
       )}
 

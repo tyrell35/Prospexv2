@@ -230,7 +230,7 @@ export async function POST(request: NextRequest) {
         if (!response.ok) {
           const errText = await response.text();
           console.error('Claude API error:', errText);
-          await supabase.from('leads').update({ playbook_status: 'none' }).eq('id', lid);
+          await supabase.from('leads').update({ playbook_status: 'failed' }).eq('id', lid);
           results.push({ lead_id: lid, status: `error: Claude API ${response.status}` });
           continue;
         }
@@ -266,6 +266,7 @@ export async function POST(request: NextRequest) {
 
         if (pbError) {
           console.error('Playbook save error:', pbError);
+          await supabase.from('leads').update({ playbook_status: 'failed' }).eq('id', lid);
           results.push({ lead_id: lid, status: 'error: save failed' });
           continue;
         }
@@ -304,7 +305,7 @@ export async function POST(request: NextRequest) {
         results.push({ lead_id: lid, status: 'ready', playbook_id: playbook?.id });
       } catch (err) {
         console.error(`Playbook error for ${lid}:`, err);
-        await supabase.from('leads').update({ playbook_status: 'none' }).eq('id', lid);
+        await supabase.from('leads').update({ playbook_status: 'failed' }).eq('id', lid);
         results.push({ lead_id: lid, status: `error: ${String(err)}` });
       }
     }

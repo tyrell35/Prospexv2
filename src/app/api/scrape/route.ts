@@ -621,10 +621,12 @@ async function enrichFromWebsite(lead: LeadResult): Promise<LeadResult> {
     // Extract Instagram
     if (!lead.instagram_url) {
       const igRegex = /(?:https?:\/\/)?(?:www\.)?instagram\.com\/([a-zA-Z0-9_.]{2,30})\/?/gi;
+      const platformAccounts = ['wix', 'squarespace', 'wordpress', 'shopify', 'godaddy', 'weebly', 'webflow', 'jimdo'];
+      const igMeta = ['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'about', 'developer', 'legal', 'privacy', 'terms', 'help'];
       let match;
       while ((match = igRegex.exec(allText)) !== null) {
         const handle = match[1].toLowerCase();
-        if (!['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'about', 'developer', 'legal', 'privacy', 'terms', 'help'].includes(handle)) {
+        if (!igMeta.includes(handle) && !platformAccounts.includes(handle)) {
           lead.instagram_url = `https://instagram.com/${match[1]}`;
           break;
         }
@@ -838,6 +840,8 @@ export async function PUT(request: NextRequest) {
         google_rating: lead.google_rating || null,
         google_review_count: lead.google_review_count || null,
         instagram_url: lead.instagram_url || null,
+        has_website: !!lead.website && lead.website.length > 0,
+        has_social: !!lead.instagram_url,
         source: lead.source || 'google_maps',
         lead_priority: 'new',
       });
