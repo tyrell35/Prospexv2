@@ -265,9 +265,9 @@ export async function POST(request: NextRequest) {
           .single();
 
         if (pbError) {
-          console.error('Playbook save error:', pbError);
+          console.error('Playbook save error:', JSON.stringify(pbError));
           await supabase.from('leads').update({ playbook_status: 'failed' }).eq('id', lid);
-          results.push({ lead_id: lid, status: 'error: save failed' });
+          results.push({ lead_id: lid, status: `error: save failed — ${pbError.message}` });
           continue;
         }
 
