@@ -2,32 +2,25 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Database, Search, Settings, Crosshair, FileText, BarChart3, Columns3, Upload, TrendingUp, MapPin, Eye, BookOpen, Brain, Activity, Zap, MessageSquare, Rocket, Globe, ScrollText, Bot, Users } from 'lucide-react';
+import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+  { name: 'Lead Scraping', href: '/city-scraper', icon: Search },
+  { name: 'Instagram Scraper', href: '/instagram-scrape', icon: Camera },
   { name: 'Lead Database', href: '/leads', icon: Database },
-  { name: 'Search Leads', href: '/search', icon: Search },
-  { name: 'Market Analysis', href: '/market-analysis', icon: TrendingUp },
-  { name: 'Affluent Areas', href: '/areas', icon: Globe },
-  { name: 'City Scraper', href: '/city-scraper', icon: MapPin },
-  { name: 'Ad Intelligence', href: '/ad-intelligence', icon: Eye },
-  { name: 'Sequences', href: '/sequences', icon: Zap },
-  { name: 'Conversations', href: '/conversations', icon: MessageSquare },
-  { name: 'Automations', href: '/automations', icon: Settings },
-  { name: 'Launch Outreach', href: '/outreach-launch', icon: Rocket },
-  { name: 'Templates', href: '/templates', icon: BookOpen },
-  { name: 'Outreach Coach', href: '/outreach-coach', icon: Brain },
-  { name: 'Outreach Analytics', href: '/outreach-analytics', icon: Activity },
-  { name: 'Import CSV', href: '/import', icon: Upload },
-  { name: 'Pipeline', href: '/pipeline', icon: Columns3 },
-  { name: 'Pitches', href: '/pitch', icon: FileText },
-  { name: 'Playbooks', href: '/playbooks', icon: ScrollText },
+  { name: 'Scrape History', href: '/scrape-history', icon: History },
+  { name: 'Outreach Coach', href: '/outreach-coach', icon: GraduationCap },
+  { name: 'Conversations', href: '/conversations', icon: MessageCircle },
   { name: 'AI Agent', href: '/ai-agent', icon: Bot },
   { name: 'Team', href: '/team', icon: Users },
-  { name: 'Analytics', href: '/analytics', icon: BarChart3 },
-  { name: 'Settings', href: '/settings', icon: Settings },
+];
+
+const comingSoon = [
+  { label: 'Email Campaigns', icon: Mail },
+  { label: 'Email Accounts', icon: Inbox },
+  { label: 'Market Analysis', icon: BarChart3 },
+  { label: 'Deep Audit', icon: Shield },
 ];
 
 export default function Sidebar() {
@@ -61,6 +54,18 @@ export default function Sidebar() {
             </Link>
           );
         })}
+
+        {/* Coming Soon */}
+        <div className="px-4 pt-6 pb-1">
+          <p className="text-[9px] font-mono text-prospex-dim uppercase tracking-wider">Coming Soon</p>
+        </div>
+        {comingSoon.map((item) => (
+          <div key={item.label} className="flex items-center gap-3 px-4 py-2 opacity-30 cursor-default select-none" title="Coming Soon">
+            <item.icon className="w-4 h-4 text-prospex-dim" />
+            <span className="text-sm text-prospex-dim">{item.label}</span>
+            <span className="text-[8px] ml-auto bg-prospex-surface/50 px-1.5 py-0.5 rounded text-prospex-dim font-mono">Soon</span>
+          </div>
+        ))}
       </nav>
 
       <div className="p-4 border-t border-prospex-border">

@@ -1,326 +1,550 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+);
+
+// ═══════════════════════════════════════════════════════════════
+// AD DETECTION ENGINE — 3-Layer Intelligence
+//
+// Layer 1: Website Pixel Detection (Firecrawl)
+//   - Facebook Pixel, Google Ads tags, GTM, TikTok Pixel
+//
+// Layer 2: Meta Ad Library API (FREE)
+//   - Checks if business is actively running Facebook/Instagram ads
+//   - Returns ad count, platforms, start dates
+//   - Full commercial data for UK/EU (Digital Services Act)
+//
+// Layer 3: Google Ads Transparency Center (SerpAPI)
+//   - Checks if business is running Google Search/Display/YouTube ads
+//   - Returns ad count, formats, date ranges
+// ═══════════════════════════════════════════════════════════════
 
 interface AdDetectionResult {
-  google_ads: { detected: boolean; evidence: string[]; confidence: 'high' | 'medium' | 'low' | 'none' };
-  facebook_ads: { detected: boolean; evidence: string[]; confidence: 'high' | 'medium' | 'low' | 'none' };
-  tracking_pixels: { facebook_pixel: boolean; google_tag: boolean; tiktok_pixel: boolean; linkedin_pixel: boolean; bing_ads: boolean };
-  social_media: { facebook: string | null; instagram: string | null; tiktok: string | null; linkedin: string | null; youtube: string | null; twitter: string | null };
-  ad_score: number; // 0-100 — higher = more active advertising
-  recommendations: string[];
+  business_name: string;
+  website: string | null;
+
+  // Layer 1: Pixels
+  pixels: {
+    facebook_pixel: boolean;
+    google_ads_tag: boolean;
+    google_tag_manager: boolean;
+    tiktok_pixel: boolean;
+    linkedin_insight: boolean;
+    any_pixel: boolean;
+  };
+
+  // Layer 2: Meta Ads
+  meta_ads: {
+    checked: boolean;
+    running: boolean;
+    active_count: number;
+    platforms: string[];
+    ads_preview: Array<{
+      ad_id: string;
+      page_name: string;
+      start_date: string;
+      platform: string;
+      creative_preview: string;
+    }>;
+    error: string | null;
+  };
+
+  // Layer 3: Google Ads
+  google_ads: {
+    checked: boolean;
+    running: boolean;
+    active_count: number;
+    formats: string[];
+    advertiser_name: string | null;
+    ads_preview: Array<{
+      title: string;
+      format: string;
+      last_shown: string;
+      region: string;
+    }>;
+    error: string | null;
+  };
+
+  // Summary
+  overall_status: 'active_both' | 'active_meta' | 'active_google' | 'pixel_only' | 'none' | 'unknown';
+  confidence: 'high' | 'medium' | 'low';
+  checked_at: string;
 }
 
-// ─── CHECK WEBSITE FOR AD PIXELS & SOCIAL LINKS ────────────────
-async function analyzeWebsite(website: string): Promise<{
-  pixels: AdDetectionResult['tracking_pixels'];
-  social: AdDetectionResult['social_media'];
-  hasAdLandingPages: boolean;
-  rawSignals: string[];
-}> {
-  const firecrawlKey = process.env.FIRECRAWL_API_KEY || '';
-  const pixels = { facebook_pixel: false, google_tag: false, tiktok_pixel: false, linkedin_pixel: false, bing_ads: false };
-  const social: AdDetectionResult['social_media'] = { facebook: null, instagram: null, tiktok: null, linkedin: null, youtube: null, twitter: null };
-  const signals: string[] = [];
+// ═══ LAYER 1: WEBSITE PIXEL DETECTION ═══
+async function detectPixels(website: string): Promise<AdDetectionResult['pixels']> {
+  const defaults = {
+    facebook_pixel: false,
+    google_ads_tag: false,
+    google_tag_manager: false,
+    tiktok_pixel: false,
+    linkedin_insight: false,
+    any_pixel: false,
+  };
 
-  if (!firecrawlKey || !website) return { pixels, social, hasAdLandingPages: false, rawSignals: signals };
+  const firecrawlKey = process.env.FIRECRAWL_API_KEY;
+  if (!firecrawlKey || !website) return defaults;
 
   try {
-    const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
+    const res = await fetch('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${firecrawlKey}` },
-      body: JSON.stringify({ url: website, formats: ['markdown', 'html'], onlyMainContent: false }),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${firecrawlKey}`,
+      },
+      body: JSON.stringify({ url: website, formats: ['html'], onlyMainContent: false }),
+      signal: AbortSignal.timeout(15000),
     });
 
-    if (!response.ok) return { pixels, social, hasAdLandingPages: false, rawSignals: signals };
-    const data = await response.json();
+    if (!res.ok) return defaults;
+    const data = await res.json();
     const html = (data?.data?.html || '').toLowerCase();
-    const md = (data?.data?.markdown || '').toLowerCase();
-    const combined = html + ' ' + md;
 
-    // Detect tracking pixels from HTML source
-    if (html.includes('fbq(') || html.includes('facebook.com/tr') || html.includes('connect.facebook.net') || html.includes('fb-pixel') || html.includes('facebook pixel')) {
-      pixels.facebook_pixel = true;
-      signals.push('Facebook Pixel detected on website');
-    }
-    if (html.includes('gtag(') || html.includes('googletagmanager.com') || html.includes('google-analytics.com') || html.includes('ga.js') || html.includes('gtag.js') || html.includes('analytics.js')) {
-      pixels.google_tag = true;
-      signals.push('Google Tag / Analytics detected on website');
-    }
-    if (html.includes('googleadservices.com') || html.includes('googlesyndication') || html.includes('adwords') || html.includes('gads') || html.includes('google_conversion') || html.includes('ads/ga-audiences')) {
-      pixels.google_tag = true;
-      signals.push('Google Ads conversion tracking detected');
-    }
-    if (html.includes('tiktok.com/i18n/pixel') || html.includes('analytics.tiktok.com') || html.includes('ttq.load')) {
-      pixels.tiktok_pixel = true;
-      signals.push('TikTok Pixel detected on website');
-    }
-    if (html.includes('snap.licdn.com') || html.includes('linkedin.com/px') || html.includes('_linkedin_partner_id')) {
-      pixels.linkedin_pixel = true;
-      signals.push('LinkedIn Insight Tag detected on website');
-    }
-    if (html.includes('bat.bing.com') || html.includes('uetq') || html.includes('bing ads')) {
-      pixels.bing_ads = true;
-      signals.push('Bing Ads UET tag detected on website');
-    }
+    const pixels = {
+      facebook_pixel: html.includes('fbq(') || html.includes('facebook.com/tr') || html.includes('connect.facebook.net'),
+      google_ads_tag: html.includes('googleadservices') || html.includes('google_conversion') || html.includes('gtag(\'event\'') || html.includes('ads/ga-audiences'),
+      google_tag_manager: html.includes('googletagmanager.com') || html.includes('gtm.js'),
+      tiktok_pixel: html.includes('analytics.tiktok.com') || html.includes('ttq.load'),
+      linkedin_insight: html.includes('snap.licdn.com') || html.includes('linkedin.com/li/'),
+      any_pixel: false,
+    };
 
-    // Extract social media links
-    const socialPatterns: [keyof typeof social, RegExp][] = [
-      ['facebook', /(?:https?:\/\/)?(?:www\.)?facebook\.com\/([a-zA-Z0-9.]+)/i],
-      ['instagram', /(?:https?:\/\/)?(?:www\.)?instagram\.com\/([a-zA-Z0-9_.]+)/i],
-      ['tiktok', /(?:https?:\/\/)?(?:www\.)?tiktok\.com\/@([a-zA-Z0-9_.]+)/i],
-      ['linkedin', /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/(?:company|in)\/([a-zA-Z0-9-]+)/i],
-      ['youtube', /(?:https?:\/\/)?(?:www\.)?youtube\.com\/(?:@|channel\/|c\/)([a-zA-Z0-9_-]+)/i],
-      ['twitter', /(?:https?:\/\/)?(?:www\.)?(?:twitter|x)\.com\/([a-zA-Z0-9_]+)/i],
-    ];
+    pixels.any_pixel = pixels.facebook_pixel || pixels.google_ads_tag ||
+      pixels.google_tag_manager || pixels.tiktok_pixel || pixels.linkedin_insight;
 
-    for (const [platform, regex] of socialPatterns) {
-      const match = combined.match(regex);
-      if (match) {
-        const handle = match[1];
-        if (!['share', 'sharer', 'intent', 'login', 'signup', 'help', 'about', 'policy', 'terms', 'privacy'].includes(handle.toLowerCase())) {
-          social[platform] = match[0];
-        }
-      }
-    }
-
-    // Check for ad-specific landing pages
-    const hasAdLandingPages = combined.includes('utm_source') || combined.includes('utm_medium') || combined.includes('utm_campaign') || combined.includes('gclid') || combined.includes('fbclid');
-    if (hasAdLandingPages) signals.push('UTM tracking parameters found (indicates paid campaigns)');
-
-    return { pixels, social, hasAdLandingPages, rawSignals: signals };
+    return pixels;
   } catch {
-    return { pixels, social, hasAdLandingPages: false, rawSignals: signals };
+    return defaults;
   }
 }
 
-// ─── CHECK GOOGLE ADS TRANSPARENCY CENTER ──────────────────────
-async function checkGoogleAds(businessName: string, website: string): Promise<{ detected: boolean; evidence: string[]; confidence: 'high' | 'medium' | 'low' | 'none' }> {
-  const firecrawlKey = process.env.FIRECRAWL_API_KEY || '';
-  const evidence: string[] = [];
+// ═══ LAYER 2: META AD LIBRARY CHECK ═══
+async function checkMetaAds(businessName: string, country: string): Promise<AdDetectionResult['meta_ads']> {
+  const result: AdDetectionResult['meta_ads'] = {
+    checked: false,
+    running: false,
+    active_count: 0,
+    platforms: [],
+    ads_preview: [],
+    error: null,
+  };
 
-  if (!firecrawlKey) return { detected: false, evidence: [], confidence: 'none' };
+  const metaToken = process.env.META_AD_LIBRARY_TOKEN || process.env.META_ACCESS_TOKEN;
+  if (!metaToken) {
+    result.error = 'META_AD_LIBRARY_TOKEN not configured';
+    return result;
+  }
+
+  // Map country names to ISO codes
+  const countryMap: Record<string, string> = {
+    'United Kingdom': 'GB',
+    'United States': 'US',
+    'Canada': 'CA',
+    'Australia': 'AU',
+    'Ireland': 'IE',
+    'Germany': 'DE',
+    'France': 'FR',
+    'Spain': 'ES',
+    'Italy': 'IT',
+    'Netherlands': 'NL',
+  };
+  const countryCode = countryMap[country] || 'GB';
 
   try {
-    // Google Ads Transparency Center shows all active ads for an advertiser
-    const domain = website.replace(/https?:\/\/(www\.)?/, '').replace(/\/.*/, '');
-    const transparencyUrl = `https://adstransparency.google.com/?domain=${encodeURIComponent(domain)}`;
+    const searchTerm = encodeURIComponent(businessName);
+    const url = `https://graph.facebook.com/v21.0/ads_archive?search_terms=${searchTerm}&ad_reached_countries=["${countryCode}"]&ad_active_status=ACTIVE&fields=id,ad_creative_bodies,ad_creative_link_titles,ad_delivery_start_time,publisher_platforms,page_name&limit=10&access_token=${metaToken}`;
 
-    const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${firecrawlKey}` },
-      body: JSON.stringify({ url: transparencyUrl, formats: ['markdown'] }),
-    });
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
 
-    if (response.ok) {
-      const data = await response.json();
-      const md = (data?.data?.markdown || '').toLowerCase();
-
-      if (md.includes('ads shown') || md.includes('ad creative') || md.includes('ads for this advertiser') || md.includes('running ads')) {
-        evidence.push('Active ads found in Google Ads Transparency Center');
-        return { detected: true, evidence, confidence: 'high' };
-      }
-      if (md.includes('no ads') || md.includes('no results') || md.length < 200) {
-        evidence.push('No active ads found in Google Ads Transparency Center');
-        return { detected: false, evidence, confidence: 'high' };
-      }
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      const errMsg = (errData as Record<string, Record<string, string>>)?.error?.message || `Meta API ${res.status}`;
+      result.error = errMsg;
+      return result;
     }
 
-    // Fallback: search for their brand in Google and look for "Sponsored" indicators
-    // The presence of Google Ads conversion tracking is also a strong signal
-    return { detected: false, evidence: ['Could not verify Google Ads status'], confidence: 'low' };
-  } catch {
-    return { detected: false, evidence: ['Google Ads check failed'], confidence: 'none' };
+    const data = await res.json();
+    result.checked = true;
+
+    const ads = data?.data || [];
+    result.active_count = ads.length;
+    result.running = ads.length > 0;
+
+    // Extract platforms
+    const allPlatforms = new Set<string>();
+    const previews: AdDetectionResult['meta_ads']['ads_preview'] = [];
+
+    for (const ad of ads.slice(0, 5)) {
+      const platforms = ad.publisher_platforms || [];
+      platforms.forEach((p: string) => allPlatforms.add(p));
+
+      previews.push({
+        ad_id: ad.id || '',
+        page_name: ad.page_name || businessName,
+        start_date: ad.ad_delivery_start_time || '',
+        platform: platforms.join(', '),
+        creative_preview: (ad.ad_creative_bodies?.[0] || ad.ad_creative_link_titles?.[0] || '').slice(0, 150),
+      });
+    }
+
+    result.platforms = Array.from(allPlatforms);
+    result.ads_preview = previews;
+
+    // Check for more results (paging)
+    if (data?.paging?.next) {
+      // There are more ads — get total count
+      result.active_count = Math.max(ads.length, 10); // At least 10+
+    }
+
+    return result;
+  } catch (err: unknown) {
+    result.error = err instanceof Error ? err.message : 'Meta Ad Library check failed';
+    return result;
   }
 }
 
-// ─── CHECK FACEBOOK AD LIBRARY ─────────────────────────────────
-async function checkFacebookAds(businessName: string, facebookUrl: string | null): Promise<{ detected: boolean; evidence: string[]; confidence: 'high' | 'medium' | 'low' | 'none' }> {
-  const firecrawlKey = process.env.FIRECRAWL_API_KEY || '';
-  const evidence: string[] = [];
+// ═══ LAYER 3: GOOGLE ADS TRANSPARENCY CHECK ═══
+async function checkGoogleAds(businessName: string, website: string | null): Promise<AdDetectionResult['google_ads']> {
+  const result: AdDetectionResult['google_ads'] = {
+    checked: false,
+    running: false,
+    active_count: 0,
+    formats: [],
+    advertiser_name: null,
+    ads_preview: [],
+    error: null,
+  };
 
-  if (!firecrawlKey) return { detected: false, evidence: [], confidence: 'none' };
+  const serpApiKey = process.env.SERPAPI_KEY;
+  if (!serpApiKey) {
+    result.error = 'SERPAPI_KEY not configured';
+    return result;
+  }
 
   try {
-    // Meta Ad Library is public — search by page name
-    const searchTerm = facebookUrl
-      ? facebookUrl.replace(/https?:\/\/(www\.)?facebook\.com\//, '').replace(/\/.*/, '')
+    // Search by domain first (more accurate), then by business name
+    const searchQuery = website
+      ? new URL(website).hostname.replace('www.', '')
       : businessName;
 
-    const adLibraryUrl = `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&q=${encodeURIComponent(searchTerm)}`;
+    const url = `https://serpapi.com/search.json?engine=google_ads_transparency_center&advertiser_id=&text=${encodeURIComponent(searchQuery)}&region=anywhere&api_key=${serpApiKey}`;
 
-    const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${firecrawlKey}` },
-      body: JSON.stringify({ url: adLibraryUrl, formats: ['markdown'] }),
-    });
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
 
-    if (response.ok) {
-      const data = await response.json();
-      const md = (data?.data?.markdown || '').toLowerCase();
-
-      // Check if ads were found
-      if (md.includes('active ads') || md.includes('started running') || md.includes('ad creative') || md.includes('impressions') || md.includes('platforms: facebook') || md.includes('platforms: instagram')) {
-        evidence.push('Active ads found in Meta Ad Library');
-        // Try to count ads
-        const adCountMatch = md.match(/(\d+)\s*(?:active\s*)?ads?/);
-        if (adCountMatch) evidence.push(`Approximately ${adCountMatch[1]} active ads detected`);
-        return { detected: true, evidence, confidence: 'high' };
+    if (!res.ok) {
+      // Fallback: try searching by business name if domain search failed
+      if (website && searchQuery !== businessName) {
+        return checkGoogleAdsByName(businessName, serpApiKey);
       }
+      result.error = `SerpAPI returned ${res.status}`;
+      return result;
+    }
 
-      if (md.includes('no results') || md.includes('no ads') || md.length < 300) {
-        evidence.push('No active ads found in Meta Ad Library');
-        return { detected: false, evidence, confidence: 'high' };
+    const data = await res.json();
+    result.checked = true;
+
+    // Parse SerpAPI response
+    const advertisers = data?.advertisers || [];
+
+    if (advertisers.length > 0) {
+      // Find best match
+      const advertiser = advertisers[0];
+      result.advertiser_name = advertiser.name || null;
+
+      // Get their ads
+      const adsList = advertiser.ads || data?.ads || [];
+      result.active_count = adsList.length;
+      result.running = adsList.length > 0;
+
+      const formats = new Set<string>();
+      for (const ad of adsList.slice(0, 5)) {
+        const format = ad.format || ad.type || 'unknown';
+        formats.add(format);
+
+        result.ads_preview.push({
+          title: (ad.title || ad.text || '').slice(0, 100),
+          format,
+          last_shown: ad.last_shown || ad.date || '',
+          region: ad.region || 'Global',
+        });
+      }
+      result.formats = Array.from(formats);
+    } else {
+      // No advertisers found — might need to search differently
+      if (website && searchQuery !== businessName) {
+        return checkGoogleAdsByName(businessName, serpApiKey);
       }
     }
 
-    return { detected: false, evidence: ['Could not verify Facebook Ads status'], confidence: 'low' };
-  } catch {
-    return { detected: false, evidence: ['Facebook Ads check failed'], confidence: 'none' };
+    return result;
+  } catch (err: unknown) {
+    result.error = err instanceof Error ? err.message : 'Google Ads check failed';
+    return result;
   }
 }
 
-// ─── GENERATE RECOMMENDATIONS ──────────────────────────────────
-function generateRecommendations(result: AdDetectionResult): string[] {
-  const recs: string[] = [];
+async function checkGoogleAdsByName(businessName: string, serpApiKey: string): Promise<AdDetectionResult['google_ads']> {
+  const result: AdDetectionResult['google_ads'] = {
+    checked: false, running: false, active_count: 0, formats: [],
+    advertiser_name: null, ads_preview: [], error: null,
+  };
 
-  if (!result.google_ads.detected && !result.facebook_ads.detected) {
-    recs.push('🚨 NOT running ANY paid advertising — competitors are capturing their potential customers');
-    recs.push('💰 Google Ads would put them in front of people actively searching for their services TODAY');
-    recs.push('📱 Facebook/Instagram Ads would build awareness and generate bookings from local audiences');
+  try {
+    const url = `https://serpapi.com/search.json?engine=google_ads_transparency_center&text=${encodeURIComponent(businessName)}&region=anywhere&api_key=${serpApiKey}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) {
+      result.error = `SerpAPI returned ${res.status}`;
+      return result;
+    }
+    const data = await res.json();
+    result.checked = true;
+
+    const advertisers = data?.advertisers || [];
+    if (advertisers.length > 0) {
+      const advertiser = advertisers[0];
+      result.advertiser_name = advertiser.name || null;
+      const adsList = advertiser.ads || data?.ads || [];
+      result.active_count = adsList.length;
+      result.running = adsList.length > 0;
+
+      const formats = new Set<string>();
+      for (const ad of adsList.slice(0, 5)) {
+        formats.add(ad.format || 'unknown');
+        result.ads_preview.push({
+          title: (ad.title || ad.text || '').slice(0, 100),
+          format: ad.format || 'unknown',
+          last_shown: ad.last_shown || '',
+          region: ad.region || 'Global',
+        });
+      }
+      result.formats = Array.from(formats);
+    }
+    return result;
+  } catch (err: unknown) {
+    result.error = err instanceof Error ? err.message : 'Google Ads name check failed';
+    return result;
   }
-
-  if (!result.google_ads.detected) {
-    recs.push('🔍 No Google Ads detected — missing out on high-intent search traffic');
-    recs.push('💡 Recommend: Start with Google Search Ads targeting "niche + location" keywords');
-  }
-
-  if (!result.facebook_ads.detected) {
-    recs.push('📱 No Facebook/Instagram Ads detected — missing out on social media lead generation');
-    recs.push('💡 Recommend: Start with local awareness + lead generation campaigns on Meta');
-  }
-
-  if (!result.tracking_pixels.facebook_pixel && result.social_media.facebook) {
-    recs.push('⚠️ Has Facebook page but NO Facebook Pixel — cannot retarget website visitors');
-    recs.push('💡 Quick win: Install Facebook Pixel to build retargeting audiences');
-  }
-
-  if (!result.tracking_pixels.google_tag) {
-    recs.push('⚠️ No Google Analytics/Tag Manager — cannot track website performance');
-    recs.push('💡 Quick win: Install Google Tag Manager for proper tracking');
-  }
-
-  if (!result.social_media.instagram) {
-    recs.push('📸 No Instagram presence detected — missing the #1 platform for visual businesses');
-  }
-
-  if (!result.social_media.tiktok) {
-    recs.push('🎵 No TikTok presence detected — fastest-growing platform for local discovery');
-  }
-
-  if (result.google_ads.detected && result.facebook_ads.detected) {
-    recs.push('✅ Already running ads on both Google and Meta — focus on OPTIMISATION not setup');
-    recs.push('💡 Pitch: Audit their current ad spend and show wasted budget / missed opportunities');
-  }
-
-  return recs;
 }
 
-// ─── CALCULATE AD SCORE ────────────────────────────────────────
-function calculateAdScore(result: Omit<AdDetectionResult, 'ad_score' | 'recommendations'>): number {
-  let score = 0;
+// ═══ DETERMINE OVERALL STATUS ═══
+function determineOverallStatus(
+  pixels: AdDetectionResult['pixels'],
+  meta: AdDetectionResult['meta_ads'],
+  google: AdDetectionResult['google_ads']
+): { status: AdDetectionResult['overall_status']; confidence: AdDetectionResult['confidence'] } {
+  const metaRunning = meta.running;
+  const googleRunning = google.running;
 
-  // Google Ads (25 pts)
-  if (result.google_ads.detected) score += 25;
-
-  // Facebook Ads (25 pts)
-  if (result.facebook_ads.detected) score += 25;
-
-  // Tracking pixels (30 pts total)
-  if (result.tracking_pixels.google_tag) score += 10;
-  if (result.tracking_pixels.facebook_pixel) score += 10;
-  if (result.tracking_pixels.tiktok_pixel) score += 4;
-  if (result.tracking_pixels.linkedin_pixel) score += 3;
-  if (result.tracking_pixels.bing_ads) score += 3;
-
-  // Social media presence (20 pts total)
-  const socialCount = Object.values(result.social_media).filter(Boolean).length;
-  score += Math.min(socialCount * 4, 20);
-
-  return Math.min(score, 100);
+  if (metaRunning && googleRunning) {
+    return { status: 'active_both', confidence: 'high' };
+  }
+  if (metaRunning) {
+    return { status: 'active_meta', confidence: 'high' };
+  }
+  if (googleRunning) {
+    return { status: 'active_google', confidence: 'high' };
+  }
+  if (pixels.any_pixel) {
+    // Has pixels but no confirmed active ads
+    return { status: 'pixel_only', confidence: 'medium' };
+  }
+  if (meta.checked || google.checked) {
+    // We checked and found nothing
+    return { status: 'none', confidence: meta.checked && google.checked ? 'high' : 'medium' };
+  }
+  return { status: 'unknown', confidence: 'low' };
 }
 
-// ─── MAIN HANDLER ──────────────────────────────────────────────
+// ═══ MAIN HANDLER ═══
 export async function POST(request: NextRequest) {
   try {
-    const { leadId } = await request.json();
-    if (!leadId) return NextResponse.json({ error: 'leadId required' }, { status: 400 });
+    const body = await request.json();
+    const { action = 'detect' } = body;
 
-    const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).single();
-    if (!lead) return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
-
-    if (!lead.website) {
-      return NextResponse.json({ error: 'Lead has no website — cannot detect ad activity' }, { status: 400 });
+    switch (action) {
+      case 'detect':
+        return detectAds(body);
+      case 'detect_batch':
+        return detectAdsBatch(body);
+      case 'detect_lead':
+        return detectAdsForLead(body);
+      default:
+        return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
-
-    // Run website analysis first (needed for other checks)
-    const websiteAnalysis = await analyzeWebsite(lead.website);
-
-    // Then run ad platform checks in parallel
-    const [googleAds, facebookAds] = await Promise.all([
-      checkGoogleAds(lead.business_name, lead.website),
-      checkFacebookAds(lead.business_name, websiteAnalysis.social.facebook),
-    ]);
-
-    // Enhance Google Ads detection with pixel evidence
-    const enhancedGoogleAds = { ...googleAds };
-    if (!googleAds.detected && websiteAnalysis.pixels.google_tag && websiteAnalysis.hasAdLandingPages) {
-      enhancedGoogleAds.detected = true;
-      enhancedGoogleAds.confidence = 'medium';
-      enhancedGoogleAds.evidence = [...googleAds.evidence, 'Google Ads conversion tracking + UTM parameters detected on website'];
-    }
-
-    // Enhance Facebook Ads detection with pixel evidence
-    const enhancedFacebookAds = { ...facebookAds };
-    if (!facebookAds.detected && websiteAnalysis.pixels.facebook_pixel) {
-      enhancedFacebookAds.evidence = [...facebookAds.evidence, 'Facebook Pixel installed (may indicate past or planned ad campaigns)'];
-      enhancedFacebookAds.confidence = 'medium';
-    }
-
-    const partialResult = {
-      google_ads: enhancedGoogleAds,
-      facebook_ads: enhancedFacebookAds,
-      tracking_pixels: websiteAnalysis.pixels,
-      social_media: websiteAnalysis.social,
-    };
-
-    const adScore = calculateAdScore(partialResult);
-    const recommendations = generateRecommendations({ ...partialResult, ad_score: adScore, recommendations: [] });
-
-    const result: AdDetectionResult = {
-      ...partialResult,
-      ad_score: adScore,
-      recommendations,
-    };
-
-    // Save to lead record
-    await supabase.from('leads').update({
-      ad_detection_data: result,
-      ad_score: adScore,
-      updated_at: new Date().toISOString(),
-    }).eq('id', leadId);
-
-    // Log activity
-    await supabase.from('activity_log').insert({
-      action_type: 'audit',
-      description: `Ad detection completed for ${lead.business_name} — Score: ${adScore}/100${!enhancedGoogleAds.detected && !enhancedFacebookAds.detected ? ' (NOT advertising)' : ''}`,
-      lead_id: leadId,
-    });
-
-    return NextResponse.json({ success: true, result });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Ad detection failed';
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+// ═══ SINGLE BUSINESS AD DETECTION ═══
+async function detectAds(body: Record<string, unknown>) {
+  const { business_name, website, country = 'United Kingdom', layers = ['pixels', 'meta', 'google'] } = body;
+
+  if (!business_name) {
+    return NextResponse.json({ error: 'business_name is required' }, { status: 400 });
+  }
+
+  const layerList = layers as string[];
+
+  // Run layers in parallel
+  const [pixels, meta, google] = await Promise.all([
+    layerList.includes('pixels') && website ? detectPixels(website as string) : Promise.resolve({
+      facebook_pixel: false, google_ads_tag: false, google_tag_manager: false,
+      tiktok_pixel: false, linkedin_insight: false, any_pixel: false,
+    }),
+    layerList.includes('meta') ? checkMetaAds(business_name as string, country as string) : Promise.resolve({
+      checked: false, running: false, active_count: 0, platforms: [], ads_preview: [], error: 'skipped',
+    }),
+    layerList.includes('google') ? checkGoogleAds(business_name as string, (website as string) || null) : Promise.resolve({
+      checked: false, running: false, active_count: 0, formats: [],
+      advertiser_name: null, ads_preview: [], error: 'skipped',
+    }),
+  ]);
+
+  const { status, confidence } = determineOverallStatus(pixels, meta, google);
+
+  const result: AdDetectionResult = {
+    business_name: business_name as string,
+    website: (website as string) || null,
+    pixels,
+    meta_ads: meta,
+    google_ads: google,
+    overall_status: status,
+    confidence,
+    checked_at: new Date().toISOString(),
+  };
+
+  return NextResponse.json({ success: true, result });
+}
+
+// ═══ BATCH DETECTION (multiple businesses) ═══
+async function detectAdsBatch(body: Record<string, unknown>) {
+  const { businesses, country = 'United Kingdom' } = body;
+
+  if (!Array.isArray(businesses) || businesses.length === 0) {
+    return NextResponse.json({ error: 'businesses array required' }, { status: 400 });
+  }
+
+  // Process in batches of 3 to avoid rate limits
+  const results: AdDetectionResult[] = [];
+  const batchSize = 3;
+
+  for (let i = 0; i < Math.min(businesses.length, 20); i += batchSize) {
+    const batch = businesses.slice(i, i + batchSize);
+    const batchResults = await Promise.all(
+      batch.map(async (biz: Record<string, unknown>) => {
+        const [pixels, meta, google] = await Promise.all([
+          biz.website ? detectPixels(biz.website as string) : Promise.resolve({
+            facebook_pixel: false, google_ads_tag: false, google_tag_manager: false,
+            tiktok_pixel: false, linkedin_insight: false, any_pixel: false,
+          }),
+          checkMetaAds(biz.business_name as string, country as string),
+          checkGoogleAds(biz.business_name as string, (biz.website as string) || null),
+        ]);
+
+        const { status, confidence } = determineOverallStatus(pixels, meta, google);
+
+        return {
+          business_name: biz.business_name as string,
+          website: (biz.website as string) || null,
+          pixels,
+          meta_ads: meta,
+          google_ads: google,
+          overall_status: status,
+          confidence,
+          checked_at: new Date().toISOString(),
+        } as AdDetectionResult;
+      })
+    );
+    results.push(...batchResults);
+
+    // Small delay between batches
+    if (i + batchSize < businesses.length) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+
+  // Summary stats
+  const summary = {
+    total: results.length,
+    running_meta: results.filter(r => r.meta_ads.running).length,
+    running_google: results.filter(r => r.google_ads.running).length,
+    running_both: results.filter(r => r.meta_ads.running && r.google_ads.running).length,
+    pixel_only: results.filter(r => r.overall_status === 'pixel_only').length,
+    no_ads: results.filter(r => r.overall_status === 'none').length,
+  };
+
+  return NextResponse.json({ success: true, results, summary });
+}
+
+// ═══ DETECT ADS FOR A LEAD (by lead_id) ═══
+async function detectAdsForLead(body: Record<string, unknown>) {
+  const { lead_id } = body;
+  if (!lead_id) return NextResponse.json({ error: 'lead_id required' }, { status: 400 });
+
+  const { data: lead, error: leadErr } = await supabase
+    .from('leads')
+    .select('id, business_name, website, country')
+    .eq('id', lead_id as string)
+    .single();
+
+  if (leadErr || !lead) {
+    return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
+  }
+
+  const [pixels, meta, google] = await Promise.all([
+    lead.website ? detectPixels(lead.website) : Promise.resolve({
+      facebook_pixel: false, google_ads_tag: false, google_tag_manager: false,
+      tiktok_pixel: false, linkedin_insight: false, any_pixel: false,
+    }),
+    checkMetaAds(lead.business_name, lead.country || 'United Kingdom'),
+    checkGoogleAds(lead.business_name, lead.website || null),
+  ]);
+
+  const { status, confidence } = determineOverallStatus(pixels, meta, google);
+
+  // Save results to lead
+  const adDetectionData = {
+    pixels,
+    meta_ads: {
+      running: meta.running,
+      active_count: meta.active_count,
+      platforms: meta.platforms,
+      checked_at: new Date().toISOString(),
+    },
+    google_ads: {
+      running: google.running,
+      active_count: google.active_count,
+      formats: google.formats,
+      advertiser_name: google.advertiser_name,
+      checked_at: new Date().toISOString(),
+    },
+    overall_status: status,
+    confidence,
+    last_checked: new Date().toISOString(),
+  };
+
+  await supabase.from('leads').update({
+    ad_detection_data: adDetectionData,
+    ad_activity: status === 'active_both' || status === 'active_meta' || status === 'active_google'
+      ? 'active' : status === 'pixel_only' ? 'pixel_only' : 'none',
+  }).eq('id', lead_id as string);
+
+  return NextResponse.json({
+    success: true,
+    result: {
+      business_name: lead.business_name,
+      website: lead.website,
+      pixels,
+      meta_ads: meta,
+      google_ads: google,
+      overall_status: status,
+      confidence,
+      checked_at: new Date().toISOString(),
+    },
+  });
 }
