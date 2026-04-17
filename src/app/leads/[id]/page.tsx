@@ -31,6 +31,7 @@ import {
   Sparkles,
   Download,
   Zap,
+  TrendingDown,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getScoreBgColor, getGrade, getSourceConfig, getPriorityConfig, formatDate, formatRelativeTime } from '@/lib/utils';
@@ -91,6 +92,31 @@ export default function LeadDetailPage() {
   const [playbookExpanded, setPlaybookExpanded] = useState(false);
   const [pitches, setPitches] = useState<Array<{ id: string; pitch_type: string | null; title: string | null; created_at: string; status: string | null }>>([]);
   const [playbooks, setPlaybooks] = useState<Array<{ id: string; content: string | null; growth_score: number | null; recommended_tier: string | null; status: string | null; created_at: string }>>([]);
+  const [revenueLoss, setRevenueLoss] = useState<{
+    total_estimated_monthly_loss: number;
+    total_estimated_annual_loss: number;
+    pitch_hook: string;
+    top_3_fixes: string[];
+    review_gap: { gap: number };
+    website_losses: { website_score: number | null };
+    ad_gap: { competitors_running_ads: number };
+  } | null>(null);
+  const [calcLoading, setCalcLoading] = useState(false);
+
+  const calculateRevenueLoss = async () => {
+    setCalcLoading(true);
+    try {
+      const res = await fetch('/api/revenue-loss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'calculate', lead_id: leadId }),
+      });
+      const data = await res.json();
+      if (data.success) setRevenueLoss(data.result);
+    } catch {} finally {
+      setCalcLoading(false);
+    }
+  };
   const [copied, setCopied] = useState<string | null>(null);
 
   const fetchLead = async () => {
@@ -528,6 +554,63 @@ export default function LeadDetailPage() {
           )}
         </div>
       )}
+
+      {/* Revenue Loss Calculator */}
+      <div className="card p-4 border-red-500/20">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-mono font-semibold text-red-400 flex items-center gap-2">
+            <TrendingDown className="w-4 h-4" /> Revenue Loss Calculator
+          </h3>
+          <button
+            onClick={calculateRevenueLoss}
+            disabled={calcLoading}
+            className="text-xs px-3 py-1.5 bg-red-500/10 text-red-400 rounded-lg hover:bg-red-500/20 border border-red-500/20 disabled:opacity-50"
+          >
+            {calcLoading ? 'Calculating...' : revenueLoss ? 'Recalculate' : 'Calculate Lost Revenue'}
+          </button>
+        </div>
+        {revenueLoss && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 bg-red-500/5 rounded-lg text-center">
+                <p className="text-2xl font-mono font-bold text-red-400">£{revenueLoss.total_estimated_monthly_loss.toLocaleString()}</p>
+                <p className="text-[10px] text-prospex-dim uppercase">Est. Monthly Loss</p>
+              </div>
+              <div className="p-3 bg-red-500/5 rounded-lg text-center">
+                <p className="text-2xl font-mono font-bold text-red-400">£{revenueLoss.total_estimated_annual_loss.toLocaleString()}</p>
+                <p className="text-[10px] text-prospex-dim uppercase">Est. Annual Loss</p>
+              </div>
+            </div>
+            <div className="p-3 bg-prospex-bg rounded-lg">
+              <p className="text-xs text-prospex-text font-semibold mb-1">Pitch Hook (copy this):</p>
+              <p className="text-xs text-prospex-muted italic">{revenueLoss.pitch_hook}</p>
+            </div>
+            <div className="space-y-1">
+              <p className="text-[10px] text-prospex-dim uppercase font-mono">Top fixes:</p>
+              {revenueLoss.top_3_fixes.map((fix: string, i: number) => (
+                <p key={i} className="text-xs text-prospex-muted">• {fix}</p>
+              ))}
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+              <div className="p-2 bg-prospex-bg rounded">
+                <p className="text-amber-400 font-mono font-bold">{revenueLoss.review_gap.gap}</p>
+                <p className="text-prospex-dim">Review Gap</p>
+              </div>
+              <div className="p-2 bg-prospex-bg rounded">
+                <p className="text-blue-400 font-mono font-bold">{revenueLoss.website_losses.website_score ?? '—'}/100</p>
+                <p className="text-prospex-dim">Website Score</p>
+              </div>
+              <div className="p-2 bg-prospex-bg rounded">
+                <p className="text-purple-400 font-mono font-bold">{revenueLoss.ad_gap.competitors_running_ads}</p>
+                <p className="text-prospex-dim">Comps Running Ads</p>
+              </div>
+            </div>
+          </div>
+        )}
+        {!revenueLoss && !calcLoading && (
+          <p className="text-xs text-prospex-dim">Click &quot;Calculate Lost Revenue&quot; to see how much money this business is leaving on the table vs competitors.</p>
+        )}
+      </div>
 
       {/* Growth Playbook */}
       {playbookLoading && (
