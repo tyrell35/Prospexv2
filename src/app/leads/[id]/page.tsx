@@ -30,6 +30,7 @@ import {
   ChevronUp,
   Sparkles,
   Download,
+  Zap,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getScoreBgColor, getGrade, getSourceConfig, getPriorityConfig, formatDate, formatRelativeTime } from '@/lib/utils';
@@ -89,6 +90,7 @@ export default function LeadDetailPage() {
   const [playbookLoading, setPlaybookLoading] = useState(false);
   const [playbookExpanded, setPlaybookExpanded] = useState(false);
   const [pitches, setPitches] = useState<Array<{ id: string; pitch_type: string | null; title: string | null; created_at: string; status: string | null }>>([]);
+  const [playbooks, setPlaybooks] = useState<Array<{ id: string; content: string | null; growth_score: number | null; recommended_tier: string | null; status: string | null; created_at: string }>>([]);
   const [copied, setCopied] = useState<string | null>(null);
 
   const fetchLead = async () => {
@@ -140,6 +142,14 @@ export default function LeadDetailPage() {
         .eq('lead_id', leadId)
         .order('created_at', { ascending: false });
       setPitches(pitchData || []);
+
+      // Fetch all playbooks for this lead
+      const { data: pbAllData } = await supabase
+        .from('playbooks')
+        .select('id, content, growth_score, recommended_tier, status, created_at')
+        .eq('lead_id', leadId)
+        .order('created_at', { ascending: false });
+      setPlaybooks(pbAllData || []);
     } catch (error) {
       console.error('Failed to fetch lead:', error);
     } finally {
@@ -627,36 +637,70 @@ export default function LeadDetailPage() {
       )}
 
       {/* Pitches */}
-      {pitches.length > 0 && (
-        <div className="card p-6">
-          <h2 className="font-mono font-semibold text-prospex-text mb-4 flex items-center gap-2">
-            <ScrollText className="w-5 h-5 text-prospex-cyan" />
-            Pitches <span className="text-xs text-prospex-dim font-normal">({pitches.length})</span>
-          </h2>
-          <div className="divide-y divide-prospex-border">
+      <div className="card p-4 mt-4">
+        <h3 className="text-sm font-mono font-semibold text-prospex-text mb-3 flex items-center gap-2">
+          <Zap className="w-4 h-4 text-green-400" /> Generated Pitches
+          {pitches.length > 0 && <span className="text-xs text-prospex-dim font-normal">({pitches.length})</span>}
+        </h3>
+        {pitches.length > 0 ? (
+          <div className="space-y-2">
             {pitches.map(p => (
               <Link
                 key={p.id}
                 href={`/pitch/${p.id}`}
-                className="flex items-center justify-between py-3 px-2 -mx-2 rounded hover:bg-prospex-bg"
+                target="_blank"
+                className="flex items-center justify-between p-2 bg-prospex-bg rounded-lg hover:bg-prospex-surface transition-colors"
               >
                 <div className="min-w-0">
-                  <div className="text-sm font-mono text-prospex-text truncate">
-                    {p.title || p.pitch_type || 'Pitch'}
-                  </div>
-                  <div className="text-[11px] text-prospex-dim mt-0.5">
-                    {p.pitch_type ? <span className="uppercase tracking-wider mr-2">{p.pitch_type}</span> : null}
-                    {new Date(p.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
-                  </div>
+                  <p className="text-sm text-prospex-text truncate">{p.title || p.pitch_type || 'Pitch'}</p>
+                  <p className="text-[10px] text-prospex-dim">
+                    {p.pitch_type ? `${p.pitch_type} • ` : ''}{new Date(p.created_at).toLocaleDateString()}
+                  </p>
                 </div>
-                {p.status && (
-                  <span className="badge text-[10px] bg-prospex-bg border border-prospex-border text-prospex-muted">{p.status}</span>
-                )}
+                <ExternalLink className="w-3 h-3 text-prospex-dim flex-shrink-0" />
               </Link>
             ))}
           </div>
-        </div>
-      )}
+        ) : (
+          <p className="text-xs text-prospex-dim">No pitches yet. Run a Deep Audit first, then click Generate Pitch.</p>
+        )}
+      </div>
+
+      {/* Playbooks */}
+      <div className="card p-4 mt-4">
+        <h3 className="text-sm font-mono font-semibold text-prospex-text mb-3 flex items-center gap-2">
+          <FileText className="w-4 h-4 text-purple-400" /> Playbooks
+          {playbooks.length > 0 && <span className="text-xs text-prospex-dim font-normal">({playbooks.length})</span>}
+        </h3>
+        {(() => {
+          const status = ((lead as unknown as { playbook_status?: string }).playbook_status) || (playbooks.length > 0 ? 'ready' : 'none');
+          if (status === 'ready' && playbooks.length > 0) {
+            return (
+              <div className="space-y-2">
+                {playbooks.map(pb => (
+                  <div key={pb.id} className="p-3 bg-prospex-bg rounded-lg">
+                    <p className="text-sm text-prospex-text">Growth Score: {pb.growth_score ?? '—'}/100</p>
+                    <p className="text-[10px] text-prospex-dim">
+                      Tier: {pb.recommended_tier ?? '—'} • {new Date(pb.created_at).toLocaleDateString()}
+                    </p>
+                    <details className="mt-2">
+                      <summary className="text-xs text-prospex-cyan cursor-pointer">View Content</summary>
+                      <div className="mt-2 text-xs text-prospex-muted whitespace-pre-wrap">{pb.content || ''}</div>
+                    </details>
+                  </div>
+                ))}
+              </div>
+            );
+          }
+          if (status === 'generating') {
+            return <p className="text-xs text-amber-400">⏳ Generating playbook...</p>;
+          }
+          if (status === 'failed') {
+            return <p className="text-xs text-red-400">❌ Playbook generation failed. Try again.</p>;
+          }
+          return <p className="text-xs text-prospex-dim">No playbook yet. Click &quot;Generate Playbook&quot; to create one.</p>;
+        })()}
+      </div>
 
       {/* Activity Timeline */}
       <div className="card p-6">

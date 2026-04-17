@@ -393,3 +393,33 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+// GET — Fetch analysis history
+export async function GET() {
+  try {
+    const { data, error } = await supabase
+      .from('market_analyses')
+      .select('id, niche, location, country, total_businesses, created_at, market_data')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    return NextResponse.json({ success: true, analyses: data || [] });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Failed to fetch history';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// DELETE — Remove saved analysis
+export async function DELETE(request: NextRequest) {
+  try {
+    const { id } = await request.json();
+    if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 });
+    const { error } = await supabase.from('market_analyses').delete().eq('id', id);
+    if (error) throw error;
+    return NextResponse.json({ success: true });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Delete failed';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

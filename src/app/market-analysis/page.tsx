@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   BarChart3,
   Search,
@@ -120,22 +120,22 @@ export default function MarketAnalysisPage() {
   const [history, setHistory] = useState<Array<{ id: string; niche: string; location: string; country: string | null; total_businesses: number | null; created_at: string; market_data: MarketAnalysis }>>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [activeHistoryId, setActiveHistoryId] = useState<string | null>(null);
 
-  const loadHistory = async () => {
+  const fetchHistory = async () => {
     setHistoryLoading(true);
-    const { data } = await supabase
-      .from('market_analyses')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(20);
-    setHistory(data || []);
-    setShowHistory(true);
+    try {
+      const res = await fetch('/api/market-analysis');
+      const data = await res.json();
+      if (data.success) setHistory(data.analyses || []);
+    } catch {}
     setHistoryLoading(false);
   };
 
-  const openFromHistory = (item: { market_data: MarketAnalysis }) => {
+  const openFromHistory = (item: { id: string; market_data: MarketAnalysis }) => {
     if (!item.market_data) return;
     setAnalysis(item.market_data);
+    setActiveHistoryId(item.id);
     setNiche(item.market_data.niche || '');
     setLocation(item.market_data.location || '');
     setCountry(item.market_data.country || 'United Kingdom');
@@ -147,9 +147,19 @@ export default function MarketAnalysisPage() {
   };
 
   const deleteFromHistory = async (id: string) => {
-    await supabase.from('market_analyses').delete().eq('id', id);
+    try {
+      await fetch('/api/market-analysis', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+    } catch {}
     setHistory(prev => prev.filter(h => h.id !== id));
+    if (activeHistoryId === id) setActiveHistoryId(null);
   };
+
+  // Load history on mount
+  useEffect(() => { fetchHistory(); }, []);
 
   const handleAnalyze = async () => {
     if (!niche || !location) return;
@@ -168,6 +178,7 @@ export default function MarketAnalysisPage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || 'Analysis failed');
       setAnalysis(data.analysis);
+      fetchHistory();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Analysis failed');
     } finally {
@@ -277,10 +288,10 @@ export default function MarketAnalysisPage() {
           <p className="text-sm text-prospex-dim mt-1">Analyze the competitive landscape for any niche + location</p>
         </div>
         <button
-          onClick={loadHistory}
+          onClick={() => { fetchHistory(); setShowHistory(!showHistory); }}
           className="flex items-center gap-2 px-4 py-2 rounded-lg border border-prospex-border bg-prospex-surface hover:bg-prospex-bg text-prospex-text text-sm font-mono"
         >
-          <Clock className="w-4 h-4" /> History
+          <Clock className="w-4 h-4" /> History ({history.length})
         </button>
       </div>
 
