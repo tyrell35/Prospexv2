@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Shield, Crown, Settings } from 'lucide-react';
+import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Send, Shield, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigation = [
@@ -10,9 +10,9 @@ const navigation = [
   { name: 'Instagram Scraper', href: '/instagram-scrape', icon: Camera },
   { name: 'Lead Database', href: '/leads', icon: Database },
   { name: 'Scrape History', href: '/scrape-history', icon: History },
-  { name: 'Affluent Targeting', href: '/affluent-targeting', icon: Crown },
-  { name: 'Deep Audit / Pitch', href: '/pitch', icon: Shield },
   { name: 'Market Analysis', href: '/market-analysis', icon: BarChart3 },
+  { name: 'Deep Audit / Pitch', href: '/pitch', icon: Shield },
+  { name: 'Outreach Pipeline', href: '/outreach-pipeline', icon: Send },
   { name: 'Outreach Coach', href: '/outreach-coach', icon: GraduationCap },
   { name: 'Conversations', href: '/conversations', icon: MessageCircle },
   { name: 'AI Agent', href: '/ai-agent', icon: Bot },
