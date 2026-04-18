@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback } from 'react';
 import {
   MapPin, Play, Pause, RotateCcw, Download, Check, X, Loader2,
-  Building2, Globe2, ChevronDown, ChevronRight, Search, Database,
+  Building2, Globe2, ChevronDown, ChevronRight, Search, Database, Crown,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
@@ -49,6 +49,8 @@ export default function CityScraper() {
   const [searchFilter, setSearchFilter] = useState('');
   const [savingAll, setSavingAll] = useState(false);
   const [saveComplete, setSaveComplete] = useState(false);
+  const [searchMode, setSearchMode] = useState<'affluent' | 'custom'>('affluent');
+  const [customLocations, setCustomLocations] = useState<string>('');
   const abortRef = useRef(false);
   const pauseRef = useRef(false);
 
@@ -100,8 +102,20 @@ export default function CityScraper() {
 
   const startScraping = async () => {
     if (!niche.trim()) { alert('Enter a niche to search for'); return; }
-    const citiesToScrape = getSelectedCityObjects();
-    if (citiesToScrape.length === 0) { alert('Select at least one city'); return; }
+
+    let citiesToScrape: CityData[];
+    if (searchMode === 'custom') {
+      const locationLines = customLocations.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      if (locationLines.length === 0) { alert('Enter at least one location'); return; }
+      citiesToScrape = locationLines.map(loc => ({
+        name: loc,
+        region: 'Custom',
+        country: countryName as CityData['country'],
+      }));
+    } else {
+      citiesToScrape = getSelectedCityObjects();
+      if (citiesToScrape.length === 0) { alert('Select at least one city'); return; }
+    }
 
     abortRef.current = false;
     pauseRef.current = false;
@@ -274,9 +288,32 @@ export default function CityScraper() {
             <h1 className="text-2xl font-mono font-bold text-prospex-text flex items-center gap-3">
               <MapPin className="w-6 h-6 text-violet-400" /> City Scraper
             </h1>
-            <p className="text-sm text-prospex-dim mt-1">Bulk scrape leads from affluent cities in UK, US &amp; Canada — all results auto-save to your lead database</p>
+            <p className="text-sm text-prospex-dim mt-1">Scrape leads from any city, town, or region — or use pre-built affluent city lists</p>
           </div>
         </div>
+
+        {/* Search mode toggle */}
+        <div className="flex gap-2 mb-4">
+          <button onClick={() => setSearchMode('affluent')}
+            className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-mono font-semibold transition-all ${
+              searchMode === 'affluent'
+                ? 'bg-violet-500/20 text-violet-400 border border-violet-500/40'
+                : 'bg-prospex-surface text-prospex-muted border border-prospex-border hover:border-violet-500/20'
+            }`}>
+            <Crown className="w-4 h-4 inline mr-2" />
+            Affluent Cities
+          </button>
+          <button onClick={() => setSearchMode('custom')}
+            className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-mono font-semibold transition-all ${
+              searchMode === 'custom'
+                ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
+                : 'bg-prospex-surface text-prospex-muted border border-prospex-border hover:border-cyan-500/20'
+            }`}>
+            <Search className="w-4 h-4 inline mr-2" />
+            Custom Search
+          </button>
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
             <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">Niche</label>
@@ -295,11 +332,15 @@ export default function CityScraper() {
             </div>
           </div>
           <div className="md:col-span-2 flex items-end gap-2">
-            {!isRunning ? (
-              <button onClick={startScraping} disabled={selectedCities.size === 0 || !niche.trim()} className="btn-primary flex-1 text-sm">
-                <Play className="w-4 h-4" /> Scrape {selectedCities.size} Cities
-              </button>
-            ) : (
+            {!isRunning ? (() => {
+              const customCount = customLocations.split('\n').filter(l => l.trim()).length;
+              const count = searchMode === 'custom' ? customCount : selectedCities.size;
+              return (
+                <button onClick={startScraping} disabled={count === 0 || !niche.trim()} className="btn-primary flex-1 text-sm">
+                  <Play className="w-4 h-4" /> Scrape {count} {count === 1 ? 'Location' : 'Locations'}
+                </button>
+              );
+            })() : (
               <>
                 <button onClick={pauseScraping} className="btn flex-1 text-sm bg-amber-500/20 text-amber-400 border border-amber-500/40">
                   {isPaused ? <><Play className="w-4 h-4" /> Resume</> : <><Pause className="w-4 h-4" /> Pause</>}
@@ -314,7 +355,50 @@ export default function CityScraper() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* City Selector */}
+        {searchMode === 'custom' ? (
+          /* Custom Search panel */
+          <div className="card p-6 space-y-4">
+            <div>
+              <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">
+                Locations (one per line — city, town, county, or state)
+              </label>
+              <textarea
+                value={customLocations}
+                onChange={e => setCustomLocations(e.target.value)}
+                disabled={isRunning}
+                rows={10}
+                className="input w-full font-mono text-sm"
+                placeholder={"Enter locations, one per line:\nManchester\nLeeds\nBirmingham\nEdinburgh\nBristol\nOr paste a list of cities..."}
+              />
+              <div className="flex items-center justify-between mt-2">
+                <p className="text-[10px] text-prospex-dim">
+                  {customLocations.split('\n').filter(l => l.trim()).length} locations entered
+                </p>
+                <button onClick={() => setCustomLocations('')} className="text-[10px] text-prospex-dim hover:text-red-400">
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            {/* Quick-add common regions */}
+            <div>
+              <p className="text-[10px] text-prospex-dim uppercase font-mono mb-2">Quick add:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: 'UK Major Cities', locations: 'London\nManchester\nBirmingham\nLeeds\nGlasgow\nLiverpool\nBristol\nSheffield\nEdinburgh\nNewcastle' },
+                  { label: 'US Major Cities', locations: 'New York\nLos Angeles\nChicago\nHouston\nDallas\nMiami\nAtlanta\nPhoenix\nDenver\nSeattle' },
+                  { label: 'Canada Major', locations: 'Toronto\nVancouver\nMontreal\nCalgary\nOttawa\nEdmonton\nWinnipeg\nHalifax' },
+                ].map(preset => (
+                  <button key={preset.label} onClick={() => setCustomLocations(prev => prev ? prev + '\n' + preset.locations : preset.locations)}
+                    className="text-[9px] px-2 py-1 bg-prospex-surface rounded border border-prospex-border text-prospex-muted hover:text-prospex-text hover:border-prospex-cyan/30">
+                    + {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+        /* City Selector */
         <div className="card p-0 max-h-[600px] flex flex-col">
           <div className="p-4 border-b border-prospex-border flex items-center justify-between shrink-0">
             <h2 className="font-mono font-semibold text-prospex-text text-sm flex items-center gap-2">
@@ -367,6 +451,7 @@ export default function CityScraper() {
             })}
           </div>
         </div>
+        )}
 
         {/* Results / Progress */}
         <div className="card p-0 max-h-[600px] flex flex-col">
