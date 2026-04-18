@@ -32,6 +32,7 @@ import {
   Download,
   Zap,
   TrendingDown,
+  XCircle,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getScoreBgColor, getGrade, getSourceConfig, getPriorityConfig, formatDate, formatRelativeTime } from '@/lib/utils';
@@ -118,6 +119,13 @@ export default function LeadDetailPage() {
     }
   };
   const [copied, setCopied] = useState<string | null>(null);
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false);
+  const [templateChannel, setTemplateChannel] = useState<'instagram' | 'whatsapp' | 'sms'>('instagram');
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
+  const [editedMessage, setEditedMessage] = useState('');
+  const [copiedMessage, setCopiedMessage] = useState(false);
+  const [templateFilter, setTemplateFilter] = useState('all');
 
   const fetchLead = async () => {
     try {
@@ -290,6 +298,86 @@ export default function LeadDetailPage() {
     setTimeout(() => setCopied(null), 2000);
   };
 
+  const personalizeTemplate = (template: string): string => {
+    if (!lead) return template;
+    const firstName = lead.business_name?.split(' ')[0] || 'there';
+    return template
+      .replace(/\{\{first_name\}\}/g, firstName)
+      .replace(/\{\{business_name\}\}/g, lead.business_name || '')
+      .replace(/\{\{city\}\}/g, lead.city || '')
+      .replace(/\{\{niche\}\}/g, lead.niche || 'aesthetic treatments')
+      .replace(/\{\{treatment\}\}/g, lead.niche || 'aesthetic treatments')
+      .replace(/\{\{their_reviews\}\}/g, String(lead.google_review_count || ''))
+      .replace(/\{\{rating\}\}/g, String(lead.google_rating || ''))
+      .replace(/\{\{website_score\}\}/g, String(lead.audit_score || ''))
+      .replace(/\{\{load_time\}\}/g, '4.5')
+      .replace(/\{\{competitor_reviews\}\}/g, '')
+      .replace(/\{\{competitor_count\}\}/g, '')
+      .replace(/\{\{competitor_name\}\}/g, '')
+      .replace(/\{\{avg_reviews\}\}/g, '')
+      .replace(/\{\{day\}\}/g, 'Tuesday')
+      .replace(/\{\{time\}\}/g, '2pm')
+      .replace(/\{\{day1\}\}/g, 'Tuesday')
+      .replace(/\{\{time1\}\}/g, '2pm')
+      .replace(/\{\{day2\}\}/g, 'Thursday')
+      .replace(/\{\{time2\}\}/g, '11am')
+      .replace(/\{\{booking_link\}\}/g, 'book.infinityclients.com');
+  };
+
+  const loadTemplates = async (channel: 'instagram' | 'whatsapp' | 'sms') => {
+    setTemplateChannel(channel);
+
+    const { data } = await supabase
+      .from('conversation_templates')
+      .select('*')
+      .or(`channel.eq.${channel},channel.eq.all`)
+      .order('category', { ascending: true });
+
+    const filled = (data || []).map((t: any) => ({
+      ...t,
+      filled_content: personalizeTemplate(t.content),
+    }));
+
+    setTemplates(filled);
+    setShowTemplatePicker(true);
+    setSelectedTemplate(null);
+    setEditedMessage('');
+  };
+
+  const selectTemplate = (template: any) => {
+    setSelectedTemplate(template);
+    setEditedMessage(template.filled_content);
+  };
+
+  const copyAndOpen = (openLink: boolean) => {
+    navigator.clipboard.writeText(editedMessage);
+    setCopiedMessage(true);
+    setTimeout(() => setCopiedMessage(false), 3000);
+
+    if (openLink) {
+      if (templateChannel === 'instagram') {
+        const handle = lead?.instagram_url?.split('/').filter(Boolean).pop() || '';
+        window.open(`https://www.instagram.com/direct/t/${handle}/`, '_blank');
+      } else if (templateChannel === 'whatsapp') {
+        const phone = (lead?.phone || '').replace(/[^0-9+]/g, '');
+        window.open(`https://wa.me/${phone}?text=${encodeURIComponent(editedMessage)}`, '_blank');
+      }
+    }
+
+    fetch('/api/outreach-tracker', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'log_outreach',
+        lead_id: lead?.id,
+        channel: templateChannel,
+        stage: selectedTemplate?.category || 'cold_open',
+        message_sent: editedMessage,
+        sent_by: 'manual',
+      }),
+    });
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -330,20 +418,23 @@ export default function LeadDetailPage() {
             {deepAuditLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Microscope className="w-3.5 h-3.5" />}
             Deep Audit
           </button>
-          {lead.phone && lead.whatsapp_eligible && (
-            <a href={`https://wa.me/${(lead.phone_formatted || lead.phone).replace(/[^0-9]/g, "")}?text=Hi%2C%20I%20came%20across%20your%20business%20and%20wanted%20to%20reach%20out.`} target="_blank" rel="noopener noreferrer" className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/40 hover:bg-green-500/30">
-              <MessageCircle className="w-3.5 h-3.5" /> WhatsApp
-            </a>
-          )}
-          {lead.phone && !lead.whatsapp_eligible && (
-            <span className="btn text-xs bg-gray-500/10 text-prospex-dim border border-prospex-border cursor-default" title="Landline - not on WhatsApp">
-              <MessageCircle className="w-3.5 h-3.5" /> Landline
-            </span>
-          )}
           {lead.instagram_url && (
-            <a href={`https://ig.me/m/${lead.instagram_url.replace(/https?:\/\/(www\.)?instagram\.com\/?/, "").replace(/\/$/, "")}`} target="_blank" rel="noopener noreferrer" className="btn text-xs bg-pink-500/20 text-pink-400 border border-pink-500/40 hover:bg-pink-500/30">
-              <Instagram className="w-3.5 h-3.5" /> Instagram DM
-            </a>
+            <button onClick={() => loadTemplates('instagram')}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30 transition-colors">
+              <Instagram className="w-4 h-4" /> Send IG DM
+            </button>
+          )}
+          {lead.phone && (
+            <button onClick={() => loadTemplates('whatsapp')}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30 transition-colors">
+              <MessageCircle className="w-4 h-4" /> Send WhatsApp
+            </button>
+          )}
+          {lead.phone && (
+            <button onClick={() => loadTemplates('sms')}
+              className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
+              <Phone className="w-4 h-4" /> SMS Scripts
+            </button>
           )}
           {!lead.ghl_contact_id && (
             <button onClick={handleGHLPush} disabled={ghlLoading} className="btn-success text-xs">
@@ -804,6 +895,125 @@ export default function LeadDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Template Picker Modal */}
+      {showTemplatePicker && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setShowTemplatePicker(false)}>
+          <div className="bg-prospex-surface border border-prospex-border rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+
+            <div className="p-4 border-b border-prospex-border flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                {templateChannel === 'instagram' && <Instagram className="w-5 h-5 text-pink-400" />}
+                {templateChannel === 'whatsapp' && <MessageCircle className="w-5 h-5 text-green-400" />}
+                {templateChannel === 'sms' && <Phone className="w-5 h-5 text-blue-400" />}
+                <div>
+                  <h2 className="text-sm font-mono font-bold text-prospex-text">
+                    {templateChannel === 'instagram' ? 'Instagram DM' : templateChannel === 'whatsapp' ? 'WhatsApp' : 'SMS'} — {lead?.business_name}
+                  </h2>
+                  <p className="text-[10px] text-prospex-dim">{templates.length} templates available • Variables auto-filled with lead data</p>
+                </div>
+              </div>
+              <button onClick={() => setShowTemplatePicker(false)} className="text-prospex-dim hover:text-prospex-text">
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex flex-1 overflow-hidden">
+              <div className="w-1/2 border-r border-prospex-border overflow-y-auto p-3 space-y-1">
+                <div className="flex flex-wrap gap-1 mb-3 pb-2 border-b border-prospex-border/30">
+                  {['all', 'cold_open', 'gift_leads', 'follow_up', 'booking', 'objection', 'closing'].map(cat => (
+                    <button key={cat} onClick={() => setTemplateFilter(cat)}
+                      className={`text-[9px] px-2 py-1 rounded-full font-mono transition-colors ${
+                        templateFilter === cat
+                          ? 'bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/30'
+                          : 'bg-prospex-bg text-prospex-dim hover:text-prospex-text'
+                      }`}>
+                      {cat === 'all' ? 'All' : cat.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                    </button>
+                  ))}
+                </div>
+
+                {templates
+                  .filter(t => templateFilter === 'all' || t.category === templateFilter)
+                  .map((t: any) => (
+                  <button key={t.id} onClick={() => selectTemplate(t)}
+                    className={`w-full text-left p-2.5 rounded-lg transition-colors ${
+                      selectedTemplate?.id === t.id
+                        ? 'bg-prospex-cyan/10 border border-prospex-cyan/30'
+                        : 'hover:bg-prospex-bg border border-transparent'
+                    }`}>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-prospex-text truncate">{t.name}</p>
+                      <span className="text-[8px] px-1.5 py-0.5 rounded bg-prospex-bg text-prospex-dim font-mono shrink-0 ml-2">
+                        {t.category?.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-prospex-dim mt-1 line-clamp-2">{t.filled_content?.slice(0, 80)}...</p>
+                  </button>
+                ))}
+              </div>
+
+              <div className="w-1/2 p-4 flex flex-col">
+                {selectedTemplate ? (
+                  <>
+                    <div className="flex items-center justify-between mb-2">
+                      <h3 className="text-xs font-mono font-semibold text-prospex-text">{selectedTemplate.name}</h3>
+                      <span className="text-[8px] px-1.5 py-0.5 rounded bg-prospex-surface text-prospex-dim">
+                        {selectedTemplate.channel} • {selectedTemplate.category?.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+
+                    <textarea
+                      value={editedMessage}
+                      onChange={e => setEditedMessage(e.target.value)}
+                      className="flex-1 w-full bg-prospex-bg border border-prospex-border rounded-lg p-3 text-xs text-prospex-text resize-none focus:border-prospex-cyan/50 focus:outline-none font-mono leading-relaxed"
+                      placeholder="Select a template from the left..."
+                    />
+
+                    <div className="flex items-center justify-between mt-2">
+                      <p className="text-[9px] text-prospex-dim">{editedMessage.length} characters</p>
+                      {editedMessage.includes('{{') && (
+                        <p className="text-[9px] text-amber-400">⚠️ Some variables need manual replacement</p>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2 mt-3">
+                      <button onClick={() => copyAndOpen(false)}
+                        className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-colors ${
+                          copiedMessage
+                            ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                            : 'bg-prospex-bg text-prospex-muted border border-prospex-border hover:border-prospex-cyan/30'
+                        }`}>
+                        {copiedMessage ? '✓ Copied!' : '📋 Copy Message'}
+                      </button>
+                      <button onClick={() => copyAndOpen(true)}
+                        className={`flex-1 py-2 text-xs font-semibold rounded-lg transition-colors ${
+                          templateChannel === 'instagram'
+                            ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30'
+                            : templateChannel === 'whatsapp'
+                            ? 'bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30'
+                            : 'bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30'
+                        }`}>
+                        {templateChannel === 'instagram' ? '📤 Copy & Open IG'
+                         : templateChannel === 'whatsapp' ? '📤 Copy & Open WA'
+                         : '📋 Copy SMS'}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center">
+                    <div className="text-center">
+                      <MessageCircle className="w-8 h-8 text-prospex-dim mx-auto mb-2" />
+                      <p className="text-xs text-prospex-dim">Select a template from the left</p>
+                      <p className="text-[10px] text-prospex-dim mt-1">Variables like name, city, and review count are auto-filled</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
