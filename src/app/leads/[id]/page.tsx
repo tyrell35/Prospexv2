@@ -359,7 +359,7 @@ export default function LeadDetailPage() {
         const handle = lead?.instagram_url?.split('/').filter(Boolean).pop() || '';
         window.open(`https://www.instagram.com/direct/t/${handle}/`, '_blank');
       } else if (templateChannel === 'whatsapp') {
-        const phone = (lead?.phone || '').replace(/[^0-9+]/g, '');
+        const phone = (lead?.phone_formatted || lead?.phone || '').replace(/[^0-9]/g, '');
         window.open(`https://wa.me/${phone}?text=${encodeURIComponent(editedMessage)}`, '_blank');
       }
     }
@@ -424,13 +424,13 @@ export default function LeadDetailPage() {
               <Instagram className="w-4 h-4" /> Send IG DM
             </button>
           )}
-          {lead.phone && (
+          {lead.phone && lead.whatsapp_eligible && (
             <button onClick={() => loadTemplates('whatsapp')}
               className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30 transition-colors">
               <MessageCircle className="w-4 h-4" /> Send WhatsApp
             </button>
           )}
-          {lead.phone && (
+          {lead.phone && lead.whatsapp_eligible && (
             <button onClick={() => loadTemplates('sms')}
               className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
               <Phone className="w-4 h-4" /> SMS Scripts
