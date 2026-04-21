@@ -58,7 +58,7 @@ export default function PipelinePage() {
   return (
     <div className="max-w-full mx-auto space-y-4">
       <div>
-        <h1 className="text-2xl font-mono font-bold text-prospex-text flex items-center gap-3"><Columns3 className="w-6 h-6 text-prospex-cyan" />Sales Pipeline</h1>
+        <h1 className="text-xl md:text-2xl font-mono font-bold text-prospex-text flex items-center gap-3"><Columns3 className="w-5 h-5 md:w-6 md:h-6 text-prospex-cyan" />Sales Pipeline</h1>
         <p className="text-sm text-prospex-dim mt-1">Drag leads between stages to track your sales process</p>
       </div>
 
@@ -66,7 +66,7 @@ export default function PipelinePage() {
         {PIPELINE_STAGES.map(stage => {
           const stageLeads = getStageLeads(stage.id);
           return (
-            <div key={stage.id} className="flex-shrink-0 w-72"
+            <div key={stage.id} className="flex-shrink-0 w-[85vw] max-w-[280px] md:w-72 md:max-w-none"
               onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, stage.id)}>
               {/* Column Header */}
               <div className={cn('p-3 rounded-t-lg border border-b-0', stage.color)}>

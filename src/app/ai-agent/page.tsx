@@ -307,14 +307,14 @@ export default function AIAgentConfigPage() {
       <Section id="services" icon={BookOpen} title={`Services (${config.services.length})`}>
         <div className="space-y-3">
           {config.services.map((service, i) => (
-            <div key={i} className="grid grid-cols-12 gap-2 items-start">
+            <div key={i} className="grid grid-cols-1 md:grid-cols-12 gap-2 items-start">
               <input value={service.name} onChange={e => updateService(i, 'name', e.target.value)}
-                placeholder="Service name" className="input col-span-5 text-sm" />
+                placeholder="Service name" className="input md:col-span-5 text-sm" />
               <input value={service.price} onChange={e => updateService(i, 'price', e.target.value)}
-                placeholder="£997/mo" className="input col-span-2 text-sm" />
+                placeholder="£997/mo" className="input md:col-span-2 text-sm" />
               <input value={service.description} onChange={e => updateService(i, 'description', e.target.value)}
-                placeholder="Brief description" className="input col-span-4 text-sm" />
-              <button onClick={() => removeService(i)} className="p-2 text-red-400 hover:text-red-300">
+                placeholder="Brief description" className="input md:col-span-4 text-sm" />
+              <button onClick={() => removeService(i)} className="p-2 text-red-400 hover:text-red-300 justify-self-end md:justify-self-auto md:col-span-1">
                 <Trash2 className="w-3 h-3" />
               </button>
             </div>

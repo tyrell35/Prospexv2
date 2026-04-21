@@ -3,8 +3,9 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Send, Shield, Settings, Menu, X } from 'lucide-react';
+import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Send, Shield, Settings, Menu, X, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/lib/auth-context';
 
 const navigation = [
   { name: 'Lead Scraping', href: '/city-scraper', icon: Search },
@@ -28,6 +29,7 @@ const comingSoon = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { user, teamMember, signOut } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
@@ -83,12 +85,24 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="p-3 md:p-4 border-t border-prospex-border">
+      <div className="p-3 md:p-4 border-t border-prospex-border space-y-2">
+        {user && (
+          <button
+            onClick={signOut}
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-prospex-muted hover:text-prospex-text hover:bg-prospex-bg transition-colors"
+          >
+            <LogOut className="w-3.5 h-3.5 text-prospex-dim" />
+            <div className="flex-1 text-left min-w-0">
+              <p className="text-xs font-mono truncate">{teamMember?.full_name || user.email}</p>
+              <p className="text-[9px] font-mono text-prospex-dim">Sign out</p>
+            </div>
+          </button>
+        )}
         <div className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full bg-prospex-green animate-pulse-slow" />
           <span className="text-[10px] font-mono text-prospex-dim">SYSTEM ONLINE</span>
         </div>
-        <p className="text-[10px] font-mono text-prospex-dim mt-1">Prospex v3.6 Elite</p>
+        <p className="text-[10px] font-mono text-prospex-dim">Prospex v3.6 Elite</p>
       </div>
     </>
   );

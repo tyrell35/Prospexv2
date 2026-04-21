@@ -213,9 +213,9 @@ export default function ConversationsPage() {
         <p className="text-sm text-prospex-dim mt-1">AI-powered inbox — qualifying leads and booking appointments across all channels</p>
       </div>
 
-      <div className="flex gap-4" style={{ height: 'calc(100vh - 180px)' }}>
+      <div className="flex flex-col md:flex-row gap-4" style={{ height: 'calc(100vh - 180px)' }}>
         {/* Left: Conversation List */}
-        <div className="w-80 shrink-0 flex flex-col card overflow-hidden">
+        <div className={`w-full md:w-80 shrink-0 flex-col card overflow-hidden ${selectedConv ? 'hidden md:flex' : 'flex'}`}>
           {/* Filters */}
           <div className="p-3 border-b border-prospex-border/20 space-y-2">
             <div className="relative">
@@ -316,7 +316,7 @@ export default function ConversationsPage() {
         </div>
 
         {/* Right: Conversation Detail */}
-        <div className="flex-1 flex flex-col card overflow-hidden">
+        <div className={`flex-1 flex-col card overflow-hidden ${!selectedConv ? 'hidden md:flex' : 'flex'}`}>
           {!selectedConv ? (
             <div className="flex-1 flex items-center justify-center text-center px-8">
               <div>
@@ -330,6 +330,14 @@ export default function ConversationsPage() {
               {/* Header */}
               <div className="p-4 border-b border-prospex-border/20">
                 <div className="flex items-center justify-between">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <button
+                      onClick={() => setSelectedConv(null)}
+                      className="md:hidden p-1 -ml-1 rounded hover:bg-prospex-bg text-prospex-muted hover:text-prospex-text shrink-0 mt-0.5"
+                      aria-label="Back to conversations"
+                    >
+                      <ArrowRight className="w-4 h-4 rotate-180" />
+                    </button>
                   <div>
                     <div className="flex items-center gap-2">
                       <h2 className="text-base font-semibold text-prospex-text">{selectedConv.lead_name}</h2>
@@ -342,6 +350,7 @@ export default function ConversationsPage() {
                     {selectedConv.lead_business && (
                       <p className="text-xs text-prospex-dim">{selectedConv.lead_business}</p>
                     )}
+                  </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <select

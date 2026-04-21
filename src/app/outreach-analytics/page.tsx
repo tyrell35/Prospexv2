@@ -386,7 +386,7 @@ export default function OutreachAnalyticsPage() {
       <h2 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
        <Zap className="w-4 h-4 text-prospex-cyan" /> Conversion Funnel
       </h2>
-      <div className="flex items-end justify-between gap-2 px-4">
+      <div className="flex items-end justify-between gap-2 px-4 overflow-x-auto min-w-full"><div className="flex items-end justify-between gap-2 min-w-[560px] md:min-w-0 md:w-full">
        <FunnelStep label="Sent" count={m.totals.sent} rate="100%" color="bg-blue-500" width="100%" icon={<Send className="w-4 h-4 text-white" />} />
        <ArrowRight className="w-4 h-4 text-prospex-muted shrink-0 mb-8" />
        <FunnelStep label="Replied" count={m.totals.replied} rate={`${m.rates.replyRate.toFixed(1)}%`} color="bg-cyan-500" width={`${Math.max(m.rates.replyRate * 2.5, 30)}%`} icon={<MessageSquare className="w-4 h-4 text-white" />} />
@@ -397,7 +397,8 @@ export default function OutreachAnalyticsPage() {
        <ArrowRight className="w-4 h-4 text-prospex-muted shrink-0 mb-8" />
        <FunnelStep label="Closed" count={m.totals.closed} rate={`${m.rates.overallConversion.toFixed(1)}%`} color="bg-yellow-500" width={`${Math.max(m.rates.overallConversion * 5, 18)}%`} icon={<Target className="w-4 h-4 text-white" />} />
       </div>
-      <div className="flex items-center justify-between mt-4 pt-3 border-t border-prospex-border text-[10px] text-prospex-muted">
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 mt-4 pt-3 border-t border-prospex-border text-[10px] text-prospex-muted">
        <span>Show Rate: {m.rates.showRate.toFixed(0)}%</span>
        <span>Close Rate: {m.rates.closeRate.toFixed(0)}%</span>
        <span>Lost: {m.totals.lost} · Ghosted: {m.totals.ghosted} · Not Interested: {m.totals.notInterested}</span>

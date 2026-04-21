@@ -2,14 +2,13 @@
 
 import { useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { Loader2, LogIn, UserPlus, Mail, Lock, User, Eye, EyeOff } from 'lucide-react';
+import { Loader2, LogIn, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 
 export default function LoginPage() {
-  const { signIn, signUp, resetPassword } = useAuth();
-  const [mode, setMode] = useState<'signin' | 'signup' | 'reset'>('signin');
+  const { signIn, resetPassword } = useAuth();
+  const [mode, setMode] = useState<'signin' | 'reset'>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [fullName, setFullName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,12 +23,6 @@ export default function LoginPage() {
     if (mode === 'signin') {
       const { error: err } = await signIn(email, password);
       if (err) setError(err);
-    } else if (mode === 'signup') {
-      if (!fullName.trim()) { setError('Please enter your full name'); setLoading(false); return; }
-      if (password.length < 6) { setError('Password must be at least 6 characters'); setLoading(false); return; }
-      const { error: err } = await signUp(email, password, fullName);
-      if (err) setError(err);
-      else setSuccess('Account created! You can now sign in.');
     } else if (mode === 'reset') {
       const { error: err } = await resetPassword(email);
       if (err) setError(err);
@@ -52,48 +45,18 @@ export default function LoginPage() {
 
         {/* Card */}
         <div className="bg-prospex-surface border border-prospex-border rounded-xl p-6">
-          {/* Tabs */}
-          {mode !== 'reset' && (
-            <div className="flex mb-6 bg-prospex-bg rounded-lg p-1">
-              <button
-                onClick={() => { setMode('signin'); setError(null); setSuccess(null); }}
-                className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${mode === 'signin' ? 'bg-prospex-cyan text-white' : 'text-prospex-muted hover:text-white'}`}
-              >
-                Sign In
-              </button>
-              <button
-                onClick={() => { setMode('signup'); setError(null); setSuccess(null); }}
-                className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${mode === 'signup' ? 'bg-prospex-cyan text-white' : 'text-prospex-muted hover:text-white'}`}
-              >
-                Sign Up
-              </button>
-            </div>
-          )}
-
-          {mode === 'reset' && (
-            <div className="mb-6">
-              <h2 className="text-lg font-semibold text-white">Reset Password</h2>
-              <p className="text-xs text-prospex-muted mt-1">Enter your email and we&apos;ll send you a reset link.</p>
-            </div>
-          )}
+          <div className="mb-6">
+            <h2 className="text-lg font-semibold text-white">
+              {mode === 'signin' ? 'Sign In' : 'Reset Password'}
+            </h2>
+            <p className="text-xs text-prospex-muted mt-1">
+              {mode === 'signin'
+                ? 'Internal use only. Contact an admin to be invited.'
+                : 'Enter your email and we’ll send you a reset link.'}
+            </p>
+          </div>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'signup' && (
-              <div>
-                <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">Full Name</label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-prospex-dim" />
-                  <input
-                    type="text"
-                    value={fullName}
-                    onChange={e => setFullName(e.target.value)}
-                    placeholder="John Smith"
-                    className="w-full pl-10 pr-4 py-2.5 bg-prospex-bg border border-prospex-border rounded-lg text-sm text-white placeholder:text-prospex-dim focus:outline-none focus:border-prospex-cyan"
-                  />
-                </div>
-              </div>
-            )}
-
             <div>
               <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">Email</label>
               <div className="relative">
@@ -109,7 +72,7 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {mode !== 'reset' && (
+            {mode === 'signin' && (
               <div>
                 <label className="block text-xs font-mono text-prospex-dim uppercase mb-1.5">Password</label>
                 <div className="relative">
@@ -151,8 +114,6 @@ export default function LoginPage() {
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : mode === 'signin' ? (
                 <><LogIn className="w-4 h-4" /> Sign In</>
-              ) : mode === 'signup' ? (
-                <><UserPlus className="w-4 h-4" /> Create Account</>
               ) : (
                 <><Mail className="w-4 h-4" /> Send Reset Link</>
               )}
