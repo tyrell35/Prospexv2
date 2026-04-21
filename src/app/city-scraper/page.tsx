@@ -474,7 +474,7 @@ export default function CityScraper() {
           </div>
 
           {results.length > 0 && (
-            <div className="grid grid-cols-4 gap-3 p-4 border-b border-prospex-border shrink-0">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-4 border-b border-prospex-border shrink-0">
               {[
                 { val: `${doneCount}/${results.length}`, label: 'Completed', color: 'text-cyan-400' },
                 { val: totalFound, label: 'Leads Found', color: 'text-green-400' },

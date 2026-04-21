@@ -261,7 +261,7 @@ export default function AreasPage() {
       )}
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           { label: 'Total Areas', value: totalAreas, icon: MapPin, color: 'cyan' },
           { label: 'Scanned This Week', value: scannedThisWeek, icon: Clock, color: 'blue' },

@@ -266,7 +266,7 @@ export default function AIAgentConfigPage() {
 
       {/* Identity */}
       <Section id="identity" icon={Bot} title="Agent Identity">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="text-xs font-mono text-prospex-dim uppercase block mb-1">Agent Name</label>
             <input value={config.agent_name} onChange={e => updateField('agent_name', e.target.value)} placeholder="Sarah" className="input w-full" />
@@ -362,7 +362,7 @@ export default function AIAgentConfigPage() {
 
       {/* Booking */}
       <Section id="booking" icon={Calendar} title="Booking Settings">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="text-xs font-mono text-prospex-dim uppercase block mb-1">Booking Link</label>
             <input value={config.booking_link} onChange={e => updateField('booking_link', e.target.value)}
@@ -421,7 +421,7 @@ export default function AIAgentConfigPage() {
 
       {/* Operating Rules */}
       <Section id="rules" icon={Settings} title="Operating Rules">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="text-xs font-mono text-prospex-dim uppercase block mb-1">Send Window Start</label>
             <select value={config.send_window_start} onChange={e => updateField('send_window_start', parseInt(e.target.value))} className="input w-full">

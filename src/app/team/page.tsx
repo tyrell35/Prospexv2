@@ -281,7 +281,7 @@ export default function TeamPage() {
           </div>
 
           {/* Role Descriptions */}
-          <div className="grid grid-cols-3 gap-3 mt-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
             {Object.entries(roleConfig).filter(([k]) => k !== 'owner').map(([key, cfg]) => {
               const Icon = cfg.icon;
               return (
@@ -416,7 +416,7 @@ export default function TeamPage() {
                       )}
 
                       {/* Member Details */}
-                      <div className="grid grid-cols-2 gap-3 text-xs">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                         <div>
                           <span className="text-prospex-dim font-mono">Joined:</span>
                           <span className="text-prospex-text ml-2">{new Date(member.created_at).toLocaleDateString()}</span>

@@ -351,7 +351,7 @@ export default function AutomationsPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
         <div className="card p-3 text-center">
           <p className="text-xl font-mono font-bold text-prospex-text">{rules.length}</p>
           <p className="text-[9px] font-mono text-prospex-dim uppercase">Total Rules</p>

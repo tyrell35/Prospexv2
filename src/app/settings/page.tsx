@@ -186,7 +186,7 @@ export default function SettingsPage() {
       {/* Defaults */}
       <div className="card p-6">
         <h2 className="font-mono font-semibold text-prospex-text text-sm uppercase tracking-wider mb-4">Search Defaults</h2>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div><label className="block text-xs font-mono text-prospex-muted mb-1.5">Default Niche</label><input type="text" value={defaultNiche} onChange={(e) => setDefaultNiche(e.target.value)} placeholder="med spa" className="input" /></div>
           <div><label className="block text-xs font-mono text-prospex-muted mb-1.5">Default Location</label><input type="text" value={defaultLocation} onChange={(e) => setDefaultLocation(e.target.value)} placeholder="London" className="input" /></div>
           <div><label className="block text-xs font-mono text-prospex-muted mb-1.5">Default Country</label><input type="text" value={defaultCountry} onChange={(e) => setDefaultCountry(e.target.value)} placeholder="United Kingdom" className="input" /></div>

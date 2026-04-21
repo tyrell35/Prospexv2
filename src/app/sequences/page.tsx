@@ -127,7 +127,7 @@ function SequenceCard({
       </div>
 
       {/* Stats row */}
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {[
           { label: 'Enrolled', value: seq.total_enrolled, icon: Users },
           { label: 'Sent', value: seq.total_sent, icon: Send },
@@ -203,7 +203,7 @@ function SequenceBuilder({
 
         <div className="space-y-4">
           {/* Basic Info */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="text-[10px] text-prospex-dim font-mono uppercase mb-1 block">Sequence Name</label>
               <input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Med Spa IG Cold Outreach"

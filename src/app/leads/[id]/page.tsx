@@ -403,11 +403,11 @@ export default function LeadDetailPage() {
   return (
     <div className="max-w-6xl mx-auto space-y-6">
       {/* Back + Actions */}
-      <div className="flex items-center justify-between">
-        <Link href="/leads" className="btn-ghost text-xs">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <Link href="/leads" className="btn-ghost text-xs self-start">
           <ArrowLeft className="w-4 h-4" /> Back to Leads
         </Link>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {lead.website && lead.audit_status !== 'complete' && (
             <button onClick={handleRunAudit} disabled={auditLoading} className="btn-primary text-xs">
               {auditLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Shield className="w-3.5 h-3.5" />}
@@ -735,7 +735,7 @@ export default function LeadDetailPage() {
           </div>
 
           {/* Scores row */}
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <div className="p-3 rounded-lg bg-prospex-bg border border-prospex-border text-center">
               <p className="text-[10px] font-mono text-prospex-dim uppercase">Growth Score</p>
               <p className={cn('text-xl font-mono font-bold mt-1', getScoreColor(Number(playbook.growth_score) || 0))}>
@@ -899,7 +899,7 @@ export default function LeadDetailPage() {
       {/* Template Picker Modal */}
       {showTemplatePicker && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setShowTemplatePicker(false)}>
-          <div className="bg-prospex-surface border border-prospex-border rounded-xl w-full max-w-3xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+          <div className="bg-prospex-surface border border-prospex-border rounded-xl w-full max-w-3xl mx-2 md:mx-auto max-h-[90vh] md:max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
 
             <div className="p-4 border-b border-prospex-border flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -918,8 +918,8 @@ export default function LeadDetailPage() {
               </button>
             </div>
 
-            <div className="flex flex-1 overflow-hidden">
-              <div className="w-1/2 border-r border-prospex-border overflow-y-auto p-3 space-y-1">
+            <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
+              <div className="w-full md:w-1/2 border-b md:border-b-0 md:border-r border-prospex-border overflow-y-auto p-3 space-y-1 max-h-[40vh] md:max-h-none">
                 <div className="flex flex-wrap gap-1 mb-3 pb-2 border-b border-prospex-border/30">
                   {['all', 'cold_open', 'gift_leads', 'follow_up', 'booking', 'objection', 'closing'].map(cat => (
                     <button key={cat} onClick={() => setTemplateFilter(cat)}
@@ -953,7 +953,7 @@ export default function LeadDetailPage() {
                 ))}
               </div>
 
-              <div className="w-1/2 p-4 flex flex-col">
+              <div className="w-full md:w-1/2 p-4 flex flex-col">
                 {selectedTemplate ? (
                   <>
                     <div className="flex items-center justify-between mb-2">

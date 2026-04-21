@@ -110,7 +110,7 @@ export default function ImportPage() {
             <div className="w-10 h-10 rounded-lg bg-prospex-green/20 flex items-center justify-center"><Check className="w-5 h-5 text-prospex-green" /></div>
             <div><p className="text-sm font-semibold text-prospex-text">Import Complete</p><p className="text-xs text-prospex-dim">{result.total} rows processed</p></div>
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div className="p-3 bg-prospex-green/10 border border-prospex-green/30 rounded-lg text-center">
               <p className="text-2xl font-mono font-bold text-prospex-green">{result.imported}</p>
               <p className="text-xs text-prospex-dim mt-1">Imported</p>
@@ -134,7 +134,7 @@ export default function ImportPage() {
       {/* Column Mapping Info */}
       <div className="card p-6">
         <h2 className="font-mono font-semibold text-prospex-text text-sm mb-3">Supported Column Names</h2>
-        <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
           {[
             { field: 'Business Name', aliases: 'business_name, company, name' },
             { field: 'Email', aliases: 'email, email address, e-mail' },

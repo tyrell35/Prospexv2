@@ -207,7 +207,7 @@ function AdvertiserCard({ profile, maxDays, onPushToLeads }: { profile: Advertis
     </div>
 
     {/* Stats grid */}
-    <div className="grid grid-cols-4 gap-2 mb-3">
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
      <div className="bg-prospex-bg rounded-md p-2 text-center">
       <p className="text-sm font-bold text-white">{profile.winner_ads}</p>
       <p className="text-[10px] text-prospex-muted">Winners (90d+)</p>
