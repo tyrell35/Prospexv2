@@ -125,7 +125,7 @@ interface PhoneResult {
 }
 
 function validatePhone(phone: string | null, country: string | null): PhoneResult {
-  const empty: PhoneResult = { formatted: null, display: null, type: 'unknown', whatsapp_eligible: false, country_code: null };
+  const empty: PhoneResult = { formatted: null, display: null, type: 'unknown', whatsapp_eligible: true, country_code: null };
   if (!phone) return empty;
 
   // Strip all non-digit characters except leading +
@@ -176,7 +176,7 @@ function validatePhone(phone: string | null, country: string | null): PhoneResul
       formatted,
       display,
       type,
-      whatsapp_eligible: type === 'mobile',
+      whatsapp_eligible: type !== 'landline',
       country_code: '+44',
     };
   }
@@ -219,7 +219,7 @@ function validatePhone(phone: string | null, country: string | null): PhoneResul
       formatted,
       display: `+61 ${nationalNumber}`,
       type,
-      whatsapp_eligible: type === 'mobile',
+      whatsapp_eligible: type !== 'landline',
       country_code: '+61',
     };
   }
@@ -230,7 +230,7 @@ function validatePhone(phone: string | null, country: string | null): PhoneResul
       formatted: digits,
       display: phone.trim(),
       type: 'unknown',
-      whatsapp_eligible: false, // Can't reliably determine for unknown countries
+      whatsapp_eligible: true, // Default to true — show button for any phone
       country_code: null,
     };
   }

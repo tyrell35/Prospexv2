@@ -842,6 +842,7 @@ export async function PUT(request: NextRequest) {
         instagram_url: lead.instagram_url || null,
         has_website: !!lead.website && lead.website.length > 0,
         has_social: !!lead.instagram_url,
+        whatsapp_eligible: !!(lead.phone && lead.phone.length > 0),
         source: lead.source || 'google_maps',
         lead_priority: 'new',
       });

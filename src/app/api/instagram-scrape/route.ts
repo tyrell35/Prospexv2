@@ -433,6 +433,7 @@ async function saveLeadsToDatabase(leads: InstagramLead[], niche: string): Promi
       google_review_count: null,
       has_website: !!lead.website && String(lead.website).length > 0,
       has_social: !!lead.profile_url,
+      whatsapp_eligible: !!(lead.phone && String(lead.phone).length > 0),
       source: 'instagram',
       lead_priority: 'new',
       data_completeness: calculateCompleteness(lead),

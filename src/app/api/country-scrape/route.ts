@@ -92,6 +92,7 @@ async function deduplicateAndSave(leads: any[], niche: string): Promise<{ saved:
       has_social: !!lead.instagram_url,
       has_pixel: false,
       has_booking: false,
+      whatsapp_eligible: !!(lead.phone && String(lead.phone).length > 0),
       discovery_source: 'country_scrape',
     });
 
