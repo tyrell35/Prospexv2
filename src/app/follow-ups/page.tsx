@@ -598,14 +598,44 @@ function QueueRow({ item, onCopy, onSend, onReplied, onBooked, onSkip, onDead, c
 // ADD TO SEQUENCE MODAL
 // ═══════════════════════════════════════════════════════
 
+interface CampaignOption {
+  id: string;
+  name: string;
+  channel: string | null;
+  campaign_type: string | null;
+  follow_up_scripts: Array<{ message: string }> | null;
+  script_template: string | null;
+}
+
 function AddToSequenceModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const [search, setSearch] = useState('');
   const [results, setResults] = useState<Lead[]>([]);
   const [searching, setSearching] = useState(false);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [channel, setChannel] = useState<'instagram' | 'whatsapp' | 'sms'>('instagram');
+  const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(true);
+  const [campaignId, setCampaignId] = useState<string>('');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Load user campaigns once on open
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/dm-campaigns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'get_campaigns' }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return;
+        if (data.success) setCampaigns(data.campaigns || []);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setCampaignsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (!search.trim()) { setResults([]); return; }
@@ -625,6 +655,18 @@ function AddToSequenceModal({ onClose, onCreated }: { onClose: () => void; onCre
     return () => { cancelled = true; clearTimeout(t); };
   }, [search]);
 
+  // When a campaign is picked, snap the channel to match it
+  useEffect(() => {
+    if (!campaignId) return;
+    const c = campaigns.find(x => x.id === campaignId);
+    if (c && (c.channel === 'instagram' || c.channel === 'whatsapp' || c.channel === 'sms')) {
+      setChannel(c.channel);
+    }
+  }, [campaignId, campaigns]);
+
+  const selectedCampaign = campaigns.find(c => c.id === campaignId);
+  const fuCount = (selectedCampaign?.follow_up_scripts || []).length;
+
   const handleStart = async () => {
     if (!selectedLead) return;
     setCreating(true);
@@ -632,6 +674,7 @@ function AddToSequenceModal({ onClose, onCreated }: { onClose: () => void; onCre
     const res = await api<{ success: boolean; already_active?: boolean; error?: string }>('start_sequence', {
       lead_id: selectedLead.id,
       channel,
+      campaign_id: campaignId || null,
     });
     setCreating(false);
     if (res.success) {
@@ -684,23 +727,61 @@ function AddToSequenceModal({ onClose, onCreated }: { onClose: () => void; onCre
           )}
 
           {selectedLead && (
-            <div>
-              <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Channel</label>
-              <div className="flex gap-2">
-                {(['instagram', 'whatsapp', 'sms'] as const).map(ch => (
-                  <button key={ch} onClick={() => setChannel(ch)}
-                    className={cn('flex-1 py-2 text-xs font-mono rounded-lg border transition-colors',
-                      channel === ch
-                        ? 'bg-prospex-cyan/10 text-prospex-cyan border-prospex-cyan/40'
-                        : 'bg-prospex-bg text-prospex-muted border-prospex-border hover:text-prospex-text')}>
-                    {channelIcon(ch)} <span className="ml-1">{channelLabel(ch)}</span>
-                  </button>
-                ))}
+            <>
+              <div>
+                <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Campaign (optional — uses preset scripts if picked)</label>
+                {campaignsLoading ? (
+                  <div className="text-[10px] text-prospex-dim">Loading campaigns…</div>
+                ) : campaigns.length === 0 ? (
+                  <p className="text-[10px] text-prospex-dim">
+                    No user campaigns yet — sequence will use default messages. Clone a preset on{' '}
+                    <Link href="/dm-campaigns" className="text-prospex-cyan hover:underline">DM Campaigns</Link> first to pick one here.
+                  </p>
+                ) : (
+                  <>
+                    <select value={campaignId} onChange={e => setCampaignId(e.target.value)} className="input w-full">
+                      <option value="">— Use default messages —</option>
+                      {campaigns.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} {c.channel ? `· ${c.channel}` : ''} {c.campaign_type ? `· ${c.campaign_type}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {selectedCampaign && (
+                      <p className="text-[10px] text-prospex-dim mt-1">
+                        {selectedCampaign.script_template ? '✓ Cold open' : '✗ no cold-open script'}
+                        {' · '}
+                        {fuCount > 0
+                          ? `${fuCount} follow-up script${fuCount === 1 ? '' : 's'} (steps 1–${Math.min(fuCount, 6)} use the campaign; remaining fall back to defaults)`
+                          : 'no follow-up scripts (steps 1+ fall back to defaults)'}
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
-              <p className="text-[10px] text-prospex-dim mt-2">
-                Sequence: 7 touchpoints over 14 days (cold open → value add → competitor move → social proof → mini audit → breakup).
+
+              <div>
+                <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Channel</label>
+                <div className="flex gap-2">
+                  {(['instagram', 'whatsapp', 'sms'] as const).map(ch => (
+                    <button key={ch} onClick={() => setChannel(ch)}
+                      className={cn('flex-1 py-2 text-xs font-mono rounded-lg border transition-colors',
+                        channel === ch
+                          ? 'bg-prospex-cyan/10 text-prospex-cyan border-prospex-cyan/40'
+                          : 'bg-prospex-bg text-prospex-muted border-prospex-border hover:text-prospex-text')}>
+                      {channelIcon(ch)} <span className="ml-1">{channelLabel(ch)}</span>
+                    </button>
+                  ))}
+                </div>
+                {selectedCampaign && (
+                  <p className="text-[10px] text-prospex-dim mt-1">Auto-set from campaign — change if needed.</p>
+                )}
+              </div>
+
+              <p className="text-[10px] text-prospex-dim border-t border-prospex-border/40 pt-2">
+                Sequence: 7 touchpoints (cold open → value add → competitor move → social proof → mini audit → breakup → reactivation @ Day 45).
               </p>
-            </div>
+            </>
           )}
 
           {error && <p className="text-xs text-prospex-red">{error}</p>}
