@@ -7,6 +7,14 @@
     {
       "path": "/api/slack-daily-brief",
       "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/dm-campaigns?cron=reset_daily",
+      "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/dm-campaigns?cron=schedule_follow_ups",
+      "schedule": "0 * * * *"
     }
   ]
 }

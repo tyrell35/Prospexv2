@@ -234,9 +234,24 @@ function CampaignsTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <button onClick={refresh} className="btn-ghost text-xs"><RefreshCw className="w-3.5 h-3.5" /> Refresh</button>
+          <button
+            onClick={async () => {
+              const res = await api<{ success: boolean; scheduled: number; error?: string }>('schedule_follow_ups', {});
+              if (res.success) {
+                alert(`Scheduled ${res.scheduled} follow-up message${res.scheduled === 1 ? '' : 's'} across all active campaigns.`);
+                refresh();
+              } else {
+                alert(`Error: ${res.error || 'failed'}`);
+              }
+            }}
+            className="btn-ghost text-xs"
+            title="Manually trigger follow-up scheduling for all active campaigns (also runs hourly via cron)"
+          >
+            <Activity className="w-3.5 h-3.5" /> Schedule Follow-Ups
+          </button>
         </div>
         <button onClick={() => setShowForm(true)} className="btn-primary text-xs">
           <Plus className="w-3.5 h-3.5" /> New Campaign
@@ -339,6 +354,10 @@ function CampaignForm({ onClose, onCreated }: { onClose: () => void; onCreated: 
   const [campaignType, setCampaignType] = useState('cold_open');
   const [scriptTemplate, setScriptTemplate] = useState('');
   const [variantB, setVariantB] = useState('');
+  const [followUps, setFollowUps] = useState<string[]>(['']);
+  const [followUpDelayHours, setFollowUpDelayHours] = useState(48);
+  const [sendWindowStart, setSendWindowStart] = useState('09:00');
+  const [sendWindowEnd, setSendWindowEnd] = useState('17:00');
   const [targetNiche, setTargetNiche] = useState('');
   const [targetCities, setTargetCities] = useState('');
   const [targetCountry, setTargetCountry] = useState('United Kingdom');
@@ -351,6 +370,12 @@ function CampaignForm({ onClose, onCreated }: { onClose: () => void; onCreated: 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const updateFollowUp = (i: number, val: string) => {
+    setFollowUps(prev => prev.map((s, idx) => idx === i ? val : s));
+  };
+  const addFollowUp = () => setFollowUps(prev => [...prev, '']);
+  const removeFollowUp = (i: number) => setFollowUps(prev => prev.filter((_, idx) => idx !== i));
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -358,6 +383,7 @@ function CampaignForm({ onClose, onCreated }: { onClose: () => void; onCreated: 
       setError('Name and script template are required');
       return;
     }
+    const cleanFollowUps = followUps.map(s => s.trim()).filter(Boolean);
     setSaving(true);
     const res = await api<{ success: boolean; error?: string }>('create_campaign', {
       name,
@@ -365,6 +391,7 @@ function CampaignForm({ onClose, onCreated }: { onClose: () => void; onCreated: 
       campaign_type: campaignType,
       script_template: scriptTemplate,
       variant_b: variantB || undefined,
+      follow_up_scripts: cleanFollowUps,
       target_niche: targetNiche || undefined,
       target_cities: targetCities || undefined,
       target_country: targetCountry,
@@ -374,6 +401,10 @@ function CampaignForm({ onClose, onCreated }: { onClose: () => void; onCreated: 
       require_website: requireWebsite,
       require_instagram: requireInstagram,
       exclude_with_ads: excludeWithAds,
+      follow_up_delay_hours: followUpDelayHours,
+      max_follow_ups: cleanFollowUps.length,
+      send_window_start: sendWindowStart,
+      send_window_end: sendWindowEnd,
     });
     setSaving(false);
     if (res.success) onCreated();
@@ -427,6 +458,43 @@ function CampaignForm({ onClose, onCreated }: { onClose: () => void; onCreated: 
             <textarea value={variantB} onChange={e => setVariantB(e.target.value)} rows={3}
               placeholder="Leave blank to skip A/B testing"
               className="w-full bg-prospex-bg border border-prospex-border rounded-lg p-3 text-xs text-prospex-text resize-none focus:border-prospex-cyan/50 focus:outline-none font-mono leading-relaxed" />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] font-mono text-prospex-dim uppercase">Follow-Up Scripts (sent if no reply)</label>
+              <button type="button" onClick={addFollowUp} className="text-[10px] text-prospex-cyan hover:text-prospex-cyan/80 font-mono">+ add follow-up</button>
+            </div>
+            <div className="space-y-2">
+              {followUps.map((fu, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <span className="text-[10px] text-prospex-dim font-mono mt-2 shrink-0 w-12">Step {i + 1}</span>
+                  <textarea value={fu} onChange={e => updateFollowUp(i, e.target.value)} rows={2}
+                    placeholder={`Follow-up ${i + 1} message — sent ${followUpDelayHours}h after previous`}
+                    className="w-full bg-prospex-bg border border-prospex-border rounded-lg p-2 text-xs text-prospex-text resize-none focus:border-prospex-cyan/50 focus:outline-none font-mono leading-relaxed" />
+                  {followUps.length > 1 && (
+                    <button type="button" onClick={() => removeFollowUp(i)} className="text-prospex-dim hover:text-prospex-red mt-2 shrink-0">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div>
+              <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Follow-Up Delay (hrs)</label>
+              <input type="number" min={1} value={followUpDelayHours} onChange={e => setFollowUpDelayHours(parseInt(e.target.value) || 48)} className="input w-full" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Send Window Start</label>
+              <input type="time" value={sendWindowStart} onChange={e => setSendWindowStart(e.target.value)} className="input w-full" />
+            </div>
+            <div>
+              <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Send Window End</label>
+              <input type="time" value={sendWindowEnd} onChange={e => setSendWindowEnd(e.target.value)} className="input w-full" />
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">

@@ -31,6 +31,8 @@ export async function POST(request: NextRequest) {
       case 'get_stats': return getCampaignStats(body);
       case 'get_accounts': return getAccounts();
       case 'manage_accounts': return manageAccounts(body);
+      case 'schedule_follow_ups': return scheduleFollowUps(body);
+      case 'webhook_reply': return webhookReply(body);
       default:
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
     }
@@ -38,6 +40,28 @@ export async function POST(request: NextRequest) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+}
+
+// ─── GET handler for Vercel Crons ───────────────────────
+// vercel.json hits /api/dm-campaigns?cron=<name> on schedule.
+
+export async function GET(request: NextRequest) {
+  const url = new URL(request.url);
+  const cron = url.searchParams.get('cron');
+  if (!cron) return NextResponse.json({ error: 'cron param required' }, { status: 400 });
+
+  // If CRON_SECRET is set, require Bearer auth (Vercel sends this automatically)
+  const expected = process.env.CRON_SECRET;
+  if (expected) {
+    const auth = request.headers.get('authorization') || '';
+    if (auth !== `Bearer ${expected}`) {
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    }
+  }
+
+  if (cron === 'reset_daily') return manageAccounts({ sub_action: 'reset_daily' });
+  if (cron === 'schedule_follow_ups') return scheduleFollowUps({});
+  return NextResponse.json({ error: `Unknown cron: ${cron}` }, { status: 400 });
 }
 
 // ─── CAMPAIGNS ──────────────────────────────────────────
@@ -57,6 +81,7 @@ interface CreateCampaignBody {
   campaign_type?: string;
   script_template?: string;
   variant_b?: string;
+  follow_up_scripts?: string[];
   target_niche?: string;
   target_cities?: string;
   target_country?: string;
@@ -66,6 +91,10 @@ interface CreateCampaignBody {
   require_website?: boolean;
   require_instagram?: boolean;
   exclude_with_ads?: boolean;
+  follow_up_delay_hours?: number;
+  max_follow_ups?: number;
+  send_window_start?: string;
+  send_window_end?: string;
 }
 
 async function createCampaign(body: CreateCampaignBody) {
@@ -74,6 +103,10 @@ async function createCampaign(body: CreateCampaignBody) {
   }
   const cities = (body.target_cities || '').split(',').map(s => s.trim()).filter(Boolean);
   const variants = body.variant_b ? [{ id: 'b', message: body.variant_b }] : [];
+  const followUps = (body.follow_up_scripts || [])
+    .map(s => (s || '').trim())
+    .filter(Boolean)
+    .map(message => ({ message }));
 
   const { data, error } = await supabase
     .from('dm_campaigns')
@@ -83,6 +116,7 @@ async function createCampaign(body: CreateCampaignBody) {
       campaign_type: body.campaign_type || 'cold_open',
       script_template: body.script_template,
       script_variants: variants,
+      follow_up_scripts: followUps,
       target_niche: body.target_niche || null,
       target_cities: cities.length > 0 ? cities : null,
       target_country: body.target_country || 'United Kingdom',
@@ -92,6 +126,10 @@ async function createCampaign(body: CreateCampaignBody) {
       require_website: !!body.require_website,
       require_instagram: body.require_instagram ?? true,
       exclude_with_ads: !!body.exclude_with_ads,
+      follow_up_delay_hours: body.follow_up_delay_hours ?? 48,
+      max_follow_ups: body.max_follow_ups ?? Math.max(followUps.length, 0),
+      send_window_start: body.send_window_start || '09:00',
+      send_window_end: body.send_window_end || '17:00',
       status: 'draft',
     })
     .select()
@@ -155,6 +193,7 @@ interface Campaign {
   channel: string;
   script_template: string;
   script_variants: Array<{ id: string; message: string }>;
+  follow_up_scripts: Array<{ message: string }>;
   target_niche: string | null;
   target_cities: string[] | null;
   target_country: string | null;
@@ -164,6 +203,42 @@ interface Campaign {
   require_instagram: boolean;
   exclude_with_ads: boolean;
   daily_limit: number;
+  send_window_start: string;
+  send_window_end: string;
+  follow_up_delay_hours: number;
+  max_follow_ups: number;
+}
+
+// Spread N items across days/hours respecting capacity per day and send window.
+// Returns ISO timestamps in order, one per item.
+function buildSchedule(itemCount: number, capacityPerDay: number, windowStart: string, windowEnd: string, startDate: Date = new Date()): string[] {
+  if (itemCount <= 0) return [];
+  const cap = Math.max(1, capacityPerDay);
+  const [startH, startM] = (windowStart || '09:00').split(':').map(Number);
+  const [endH, endM] = (windowEnd || '17:00').split(':').map(Number);
+  const startMinutes = (startH || 0) * 60 + (startM || 0);
+  const endMinutes = (endH || 17) * 60 + (endM || 0);
+  const windowMinutes = Math.max(60, endMinutes - startMinutes);
+
+  const out: string[] = [];
+  let dayOffset = 0;
+  let inDay = 0;
+
+  for (let i = 0; i < itemCount; i++) {
+    if (inDay >= cap) { dayOffset++; inDay = 0; }
+    const day = new Date(startDate);
+    day.setDate(day.getDate() + dayOffset);
+    // Even spacing within window
+    const minuteOffset = Math.floor((inDay / cap) * windowMinutes);
+    day.setHours(0, startMinutes + minuteOffset, 0, 0);
+    // If first day's slot is in the past, push to now
+    if (dayOffset === 0 && day.getTime() < Date.now()) {
+      day.setTime(Date.now() + i * 30000); // 30s apart
+    }
+    out.push(day.toISOString());
+    inDay++;
+  }
+  return out;
 }
 
 function fillTemplate(message: string, lead: Lead): string {
@@ -226,13 +301,24 @@ async function buildQueue(body: { campaign_id: string }) {
   const skipSet = new Set((existing || []).map((r: { lead_id: string }) => r.lead_id));
   const newLeads = leads.filter((l: Lead) => !skipSet.has(l.id));
 
-  // Get active IG accounts (for round-robin)
+  // Get active IG accounts (for round-robin + capacity calc)
   const { data: igAccounts } = await supabase
     .from('ig_accounts')
-    .select('username')
+    .select('username, daily_limit')
     .eq('status', 'active')
     .order('username', { ascending: true });
-  const accountUsernames: string[] = (igAccounts || []).map((a: { username: string }) => a.username);
+  const activeAccounts: Array<{ username: string; daily_limit: number }> = (igAccounts || []).map(a => ({
+    username: (a as { username: string }).username,
+    daily_limit: (a as { daily_limit: number | null }).daily_limit || 30,
+  }));
+  const accountUsernames = activeAccounts.map(a => a.username);
+
+  // Capacity per day: sum of all active accounts' daily_limits, capped by campaign.daily_limit
+  const accountCapacity = activeAccounts.reduce((sum, a) => sum + a.daily_limit, 0);
+  const capacityPerDay = Math.max(1, Math.min(campaign.daily_limit || 30, accountCapacity || campaign.daily_limit || 30));
+
+  // Pre-compute scheduled times respecting send window + daily capacity
+  const schedule = buildSchedule(newLeads.length, capacityPerDay, campaign.send_window_start, campaign.send_window_end);
 
   // Build queue rows
   const variants = campaign.script_variants || [];
@@ -254,6 +340,7 @@ async function buildQueue(body: { campaign_id: string }) {
       step: 0,
       ig_account,
       status: 'queued',
+      scheduled_for: schedule[i] || new Date().toISOString(),
       lead_data: {
         business_name: lead.business_name,
         city: lead.city,
@@ -544,4 +631,210 @@ async function manageAccounts(body: ManageAccountsBody) {
   }
 
   return NextResponse.json({ error: `Unknown sub_action: ${sub_action}` }, { status: 400 });
+}
+
+// ─── AUTO FOLLOW-UP SCHEDULER ───────────────────────────
+// Finds sent items where the follow-up window has elapsed and replied_at is null,
+// and creates new dm_queue rows at step+1 with the next follow-up message.
+
+async function scheduleFollowUps(_body: { campaign_id?: string }) {
+  // Pull all active campaigns (or just the one specified)
+  let campaignsQ = supabase.from('dm_campaigns').select('*').eq('status', 'active');
+  if (_body.campaign_id) campaignsQ = campaignsQ.eq('id', _body.campaign_id);
+  const { data: campaigns, error: campErr } = await campaignsQ;
+  if (campErr) return NextResponse.json({ error: campErr.message }, { status: 500 });
+
+  let totalScheduled = 0;
+  const perCampaign: Array<{ campaign_id: string; scheduled: number }> = [];
+
+  for (const cRaw of campaigns || []) {
+    const c = cRaw as Campaign;
+    const maxFollowUps = c.max_follow_ups ?? 3;
+    const delayHours = c.follow_up_delay_hours ?? 48;
+    const followUpScripts = Array.isArray(c.follow_up_scripts) ? c.follow_up_scripts : [];
+    if (maxFollowUps === 0 || followUpScripts.length === 0) {
+      perCampaign.push({ campaign_id: c.id, scheduled: 0 });
+      continue;
+    }
+
+    // Pull sent items eligible for the next follow-up
+    const cutoff = new Date(Date.now() - delayHours * 60 * 60 * 1000).toISOString();
+    const { data: eligible } = await supabase
+      .from('dm_queue')
+      .select('id, lead_id, step, ig_account, variant_id, lead_data, sent_at')
+      .eq('campaign_id', c.id)
+      .eq('status', 'sent')
+      .is('replied_at', null)
+      .lte('sent_at', cutoff)
+      .lt('step', maxFollowUps)
+      .limit(2000);
+
+    if (!eligible || eligible.length === 0) {
+      perCampaign.push({ campaign_id: c.id, scheduled: 0 });
+      continue;
+    }
+
+    // Skip leads that already have a queued follow-up at step+1
+    const leadIds = eligible.map(r => (r as { lead_id: string }).lead_id);
+    const { data: existingFu } = await supabase
+      .from('dm_queue')
+      .select('lead_id, step')
+      .eq('campaign_id', c.id)
+      .in('lead_id', leadIds)
+      .eq('status', 'queued')
+      .gt('step', 0);
+    const skipKey = new Set((existingFu || []).map(r => {
+      const x = r as { lead_id: string; step: number };
+      return `${x.lead_id}|${x.step}`;
+    }));
+
+    const toCreate = eligible.filter(r => {
+      const x = r as { lead_id: string; step: number };
+      return !skipKey.has(`${x.lead_id}|${x.step + 1}`);
+    });
+    if (toCreate.length === 0) {
+      perCampaign.push({ campaign_id: c.id, scheduled: 0 });
+      continue;
+    }
+
+    // Capacity for follow-ups: same logic as build_queue
+    const { data: igAccounts } = await supabase
+      .from('ig_accounts')
+      .select('username, daily_limit')
+      .eq('status', 'active');
+    const accountCapacity = (igAccounts || []).reduce((sum, a) => sum + ((a as { daily_limit: number | null }).daily_limit || 30), 0);
+    const capacityPerDay = Math.max(1, Math.min(c.daily_limit || 30, accountCapacity || c.daily_limit || 30));
+    const schedule = buildSchedule(toCreate.length, capacityPerDay, c.send_window_start, c.send_window_end);
+
+    const newRows = toCreate.map((r, i) => {
+      const row = r as { lead_id: string; step: number; ig_account: string | null; variant_id: string | null; lead_data: Record<string, unknown> };
+      const nextStep = row.step + 1;
+      // followUpScripts is 0-indexed: index 0 = first follow-up (step 1), etc.
+      const scriptIndex = Math.min(nextStep - 1, followUpScripts.length - 1);
+      const baseMessage = followUpScripts[scriptIndex]?.message || c.script_template;
+      const ld = row.lead_data || {};
+      // Re-personalize using snapshotted lead_data
+      const message_text = fillTemplate(baseMessage, {
+        id: row.lead_id,
+        business_name: String(ld.business_name || ''),
+        city: String(ld.city || ''),
+        niche: String(ld.niche || ''),
+        instagram_handle: String(ld.instagram_handle || ''),
+        instagram_url: String(ld.instagram_url || ''),
+        phone: String(ld.phone || ''),
+        website: String(ld.website || ''),
+        google_review_count: null,
+        google_rating: null,
+      });
+      return {
+        campaign_id: c.id,
+        lead_id: row.lead_id,
+        message_text,
+        variant_id: row.variant_id || 'a',
+        step: nextStep,
+        ig_account: row.ig_account,
+        status: 'queued',
+        scheduled_for: schedule[i] || new Date().toISOString(),
+        lead_data: row.lead_data,
+      };
+    });
+
+    if (newRows.length > 0) {
+      const { error: insErr } = await supabase.from('dm_queue').insert(newRows);
+      if (!insErr) {
+        totalScheduled += newRows.length;
+        perCampaign.push({ campaign_id: c.id, scheduled: newRows.length });
+        // Bump total_queued
+        const { data: cc } = await supabase.from('dm_campaigns').select('total_queued').eq('id', c.id).single();
+        const cur = (cc as { total_queued?: number } | null)?.total_queued || 0;
+        await supabase.from('dm_campaigns').update({ total_queued: cur + newRows.length, updated_at: new Date().toISOString() }).eq('id', c.id);
+      }
+    }
+  }
+
+  return NextResponse.json({ success: true, scheduled: totalScheduled, per_campaign: perCampaign });
+}
+
+// ─── REPLY WEBHOOK ──────────────────────────────────────
+// Receives inbound replies from external sender tools (ColdDMs, n8n, etc.)
+// Body: { lead_identifier: handle|phone|queue_id, reply_text, account_username? }
+
+function classifySentiment(text: string): 'positive' | 'negative' | 'neutral' {
+  const t = text.toLowerCase();
+  const positive = /\b(yes|yeah|yep|sure|interested|sounds good|book|schedule|call me|send (it|over|info)|tell me more|let'?s do|when can|how much)\b/;
+  const negative = /\b(no|not interested|stop|unsubscribe|remove me|don'?t|fuck off|spam|leave me|never)\b/;
+  if (positive.test(t)) return 'positive';
+  if (negative.test(t)) return 'negative';
+  return 'neutral';
+}
+
+interface WebhookReplyBody {
+  lead_identifier?: string;
+  reply_text?: string;
+  account_username?: string;
+  queue_id?: string;
+  channel?: string;
+}
+
+async function webhookReply(body: WebhookReplyBody) {
+  const { lead_identifier, reply_text, account_username, queue_id } = body;
+  if (!reply_text) return NextResponse.json({ error: 'reply_text required' }, { status: 400 });
+
+  // Find the matching dm_queue row
+  type Row = { id: string; campaign_id: string; ig_account: string | null };
+  let row: Row | null = null;
+
+  if (queue_id) {
+    const { data } = await supabase.from('dm_queue').select('id, campaign_id, ig_account').eq('id', queue_id).single();
+    row = (data as Row | null) || null;
+  } else if (lead_identifier) {
+    // Try to match by IG handle, phone, or business_name in lead_data jsonb (most recent sent)
+    const id = lead_identifier.replace(/^@/, '').trim();
+    let q = supabase
+      .from('dm_queue')
+      .select('id, campaign_id, ig_account')
+      .eq('status', 'sent')
+      .or(`lead_data->>instagram_handle.eq.${id},lead_data->>phone.eq.${id},lead_data->>business_name.eq.${lead_identifier}`)
+      .order('sent_at', { ascending: false })
+      .limit(1);
+    if (account_username) q = q.eq('ig_account', account_username);
+    const { data } = await q;
+    row = (data && data.length > 0 ? (data[0] as Row) : null);
+  }
+
+  if (!row) return NextResponse.json({ error: 'No matching sent dm_queue row found' }, { status: 404 });
+
+  const sentiment = classifySentiment(reply_text);
+  const now = new Date().toISOString();
+  await supabase
+    .from('dm_queue')
+    .update({ status: 'replied', replied_at: now, reply_text, reply_sentiment: sentiment })
+    .eq('id', row.id);
+
+  // Bump campaign counters
+  const { data: c } = await supabase
+    .from('dm_campaigns')
+    .select('total_replied, total_positive, total_sent')
+    .eq('id', row.campaign_id)
+    .single();
+  const c2 = c as { total_replied?: number; total_positive?: number; total_sent?: number } | null;
+  const totalReplied = (c2?.total_replied || 0) + 1;
+  const totalPositive = (c2?.total_positive || 0) + (sentiment === 'positive' ? 1 : 0);
+  const sent = c2?.total_sent || 0;
+  const replyRate = sent > 0 ? Math.round((totalReplied / sent) * 1000) / 10 : 0;
+  await supabase
+    .from('dm_campaigns')
+    .update({ total_replied: totalReplied, total_positive: totalPositive, reply_rate: replyRate, updated_at: now })
+    .eq('id', row.campaign_id);
+
+  // Bump ig_account total_replies
+  if (row.ig_account) {
+    const { data: acc } = await supabase.from('ig_accounts').select('total_replies').eq('username', row.ig_account).single();
+    await supabase
+      .from('ig_accounts')
+      .update({ total_replies: ((acc as { total_replies?: number } | null)?.total_replies || 0) + 1, updated_at: now })
+      .eq('username', row.ig_account);
+  }
+
+  return NextResponse.json({ success: true, queue_id: row.id, sentiment });
 }
