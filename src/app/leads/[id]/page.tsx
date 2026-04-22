@@ -33,6 +33,8 @@ import {
   Zap,
   TrendingDown,
   XCircle,
+  Clock,
+  Trophy,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getScoreBgColor, getGrade, getSourceConfig, getPriorityConfig, formatDate, formatRelativeTime } from '@/lib/utils';
@@ -119,6 +121,9 @@ export default function LeadDetailPage() {
     }
   };
   const [copied, setCopied] = useState<string | null>(null);
+  const [proofAssets, setProofAssets] = useState<Array<{ id: string; asset_type: string; title: string; description: string | null; metric_before: string | null; metric_after: string | null; metric_timeframe: string | null; share_slug: string | null }>>([]);
+  const [quickLinks, setQuickLinks] = useState<Array<{ id: string; name: string; url: string; emoji: string | null }>>([]);
+  const [startingSequence, setStartingSequence] = useState(false);
   const [showTemplatePicker, setShowTemplatePicker] = useState(false);
   const [templateChannel, setTemplateChannel] = useState<'instagram' | 'whatsapp' | 'sms'>('instagram');
   const [templates, setTemplates] = useState<any[]>([]);
@@ -195,6 +200,48 @@ export default function LeadDetailPage() {
     fetchLead();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leadId]);
+
+  // Load social proof assets + quick links once
+  useEffect(() => {
+    supabase.from('social_proof_assets')
+      .select('id, asset_type, title, description, metric_before, metric_after, metric_timeframe, share_slug')
+      .eq('is_active', true)
+      .order('asset_type')
+      .then(({ data }) => setProofAssets((data || []) as typeof proofAssets));
+    supabase.from('quick_links')
+      .select('id, name, url, emoji')
+      .eq('is_active', true)
+      .order('category')
+      .then(({ data }) => setQuickLinks((data || []) as typeof quickLinks));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleStartSequence = async () => {
+    if (!lead) return;
+    setStartingSequence(true);
+    const channel: 'instagram' | 'whatsapp' | 'sms' = lead.instagram_url ? 'instagram' : lead.phone ? 'whatsapp' : 'sms';
+    const res = await fetch('/api/follow-ups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'start_sequence', lead_id: lead.id, channel }),
+    });
+    const data = await res.json();
+    setStartingSequence(false);
+    if (data.success) {
+      router.push('/follow-ups');
+    } else {
+      alert(`Failed to start sequence: ${data.error || 'unknown error'}`);
+    }
+  };
+
+  const copyProofStory = (asset: typeof proofAssets[number]) => {
+    const firstName = lead?.business_name?.split(/[\s\-&]/)[0] || 'there';
+    const tail = asset.share_slug ? `\nFull story: https://infinityclients.com/case/${asset.share_slug}` : '';
+    const msg = `Hey ${firstName}, thought this was relevant — ${asset.description}${tail}\n\nWant the playbook?`;
+    navigator.clipboard.writeText(msg);
+    setCopied(`proof-${asset.id}`);
+    setTimeout(() => setCopied(null), 2000);
+  };
 
   const handleRunAudit = async () => {
     if (!lead) return;
@@ -442,6 +489,14 @@ export default function LeadDetailPage() {
               Push to GHL
             </button>
           )}
+          <button
+            onClick={handleStartSequence}
+            disabled={startingSequence}
+            className="flex items-center gap-2 px-3 py-2 text-xs font-semibold rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/30 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
+          >
+            {startingSequence ? <Loader2 className="w-4 h-4 animate-spin" /> : <Clock className="w-4 h-4" />}
+            Start Follow-Up Sequence
+          </button>
           {/* Playbook status + action */}
           {(() => {
             const status = ((lead as unknown as { playbook_status?: string }).playbook_status) || (playbook ? 'ready' : 'none');
@@ -702,6 +757,56 @@ export default function LeadDetailPage() {
           <p className="text-xs text-prospex-dim">Click &quot;Calculate Lost Revenue&quot; to see how much money this business is leaving on the table vs competitors.</p>
         )}
       </div>
+
+      {/* Social Proof Arsenal */}
+      {(proofAssets.length > 0 || quickLinks.length > 0) && (
+        <div className="card p-4 border-amber-500/20">
+          <h3 className="text-sm font-mono font-semibold text-amber-400 flex items-center gap-2 mb-3">
+            <Trophy className="w-4 h-4" /> Social Proof Arsenal
+          </h3>
+          {proofAssets.length > 0 && (
+            <div className="space-y-2">
+              {proofAssets.map(asset => (
+                <div key={asset.id} className="flex items-center justify-between gap-2 p-2 bg-prospex-bg rounded-lg">
+                  <div className="min-w-0">
+                    <p className="text-xs text-prospex-text font-medium truncate">{asset.title}</p>
+                    {asset.metric_before && asset.metric_after && (
+                      <p className="text-[10px] text-prospex-dim">
+                        <span className="text-prospex-red">{asset.metric_before}</span>
+                        <span className="mx-1">→</span>
+                        <span className="text-prospex-green">{asset.metric_after}</span>
+                        {asset.metric_timeframe && <span className="text-prospex-dim"> in {asset.metric_timeframe}</span>}
+                      </p>
+                    )}
+                  </div>
+                  <button onClick={() => copyProofStory(asset)}
+                    className={cn('text-[10px] px-2 py-1 rounded shrink-0',
+                      copied === `proof-${asset.id}`
+                        ? 'bg-prospex-green/20 text-prospex-green'
+                        : 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20')}>
+                    {copied === `proof-${asset.id}` ? <><Check className="w-3 h-3 inline" /> Copied</> : 'Copy Story'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          {quickLinks.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-prospex-border/20">
+              {quickLinks.map(link => (
+                <button key={link.id}
+                  onClick={() => { navigator.clipboard.writeText(link.url); setCopied(`link-${link.id}`); setTimeout(() => setCopied(null), 1500); }}
+                  className={cn('text-[10px] px-2 py-1 rounded border transition-colors',
+                    copied === `link-${link.id}`
+                      ? 'bg-prospex-green/20 text-prospex-green border-prospex-green/40'
+                      : 'bg-prospex-surface text-prospex-dim border-prospex-border hover:text-prospex-text')}>
+                  {link.emoji && <span className="mr-1">{link.emoji}</span>}
+                  {copied === `link-${link.id}` ? 'Copied!' : link.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Growth Playbook */}
       {playbookLoading && (
