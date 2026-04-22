@@ -7,6 +7,8 @@ import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getSourceConfig, getPriorityConfig, formatDate } from '@/lib/utils';
 import type { Lead, TableSort, TableFilter } from '@/lib/types';
 import QuickMessage from '@/components/QuickMessage';
+import OutreachBlaster from '@/components/OutreachBlaster';
+import { Zap } from 'lucide-react';
 
 const PAGE_SIZE = 50;
 
@@ -59,6 +61,7 @@ export default function LeadsPage() {
   const [msgOpen, setMsgOpen] = useState(false);
   const [msgChannel, setMsgChannel] = useState<'whatsapp' | 'instagram'>('whatsapp');
   const [msgLead, setMsgLead] = useState<Lead | null>(null);
+  const [blasterChannel, setBlasterChannel] = useState<null | 'whatsapp' | 'instagram'>(null);
 
   // Unique values for filter dropdowns
   const [uniqueNiches, setUniqueNiches] = useState<string[]>([]);
@@ -183,6 +186,8 @@ export default function LeadsPage() {
             <div className="w-px h-6 bg-prospex-border" />
             <button onClick={async () => { await fetch('/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: Array.from(selectedIds) }) }); fetchLeads(); }} className="btn-ghost text-xs" title="Score selected leads">⭐ Score ({selectedIds.size})</button>
             <button onClick={async () => { await fetch('/api/enrich', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: Array.from(selectedIds) }) }); fetchLeads(); }} className="btn-ghost text-xs" title="Enrich emails from websites">🔍 Enrich ({selectedIds.size})</button>
+            <button onClick={() => setBlasterChannel('whatsapp')} className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30" title="Blast WhatsApp messages"><Zap className="w-3.5 h-3.5" /> Blast WA ({selectedIds.size})</button>
+            <button onClick={() => setBlasterChannel('instagram')} className="btn text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30" title="Blast Instagram DMs"><Zap className="w-3.5 h-3.5" /> Blast IG ({selectedIds.size})</button>
             <button onClick={handleExportCSV} className="btn-primary text-xs"><Download className="w-3.5 h-3.5" /> Export ({selectedIds.size})</button>
             <button onClick={handleBulkDelete} className="btn-danger text-xs"><Trash2 className="w-3.5 h-3.5" /> Delete ({selectedIds.size})</button>
           </>)}
@@ -302,6 +307,14 @@ export default function LeadsPage() {
           lead={msgLead}
         />
       )}
+
+      {/* Outreach Blaster Modal */}
+      <OutreachBlaster
+        isOpen={blasterChannel !== null}
+        onClose={() => setBlasterChannel(null)}
+        channel={blasterChannel || 'whatsapp'}
+        leads={leads.filter(l => selectedIds.has(l.id))}
+      />
     </div>
   );
 }
