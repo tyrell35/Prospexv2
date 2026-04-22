@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { X, MessageCircle, Instagram, ExternalLink, Check, SkipForward, Zap, ChevronRight, AlertCircle } from 'lucide-react';
+import { X, MessageCircle, Instagram, ExternalLink, Check, SkipForward, Zap, ChevronRight, AlertCircle, Loader2 } from 'lucide-react';
 
 interface BlasterLead {
   id: string;
@@ -26,6 +26,37 @@ interface Template {
   name: string;
   stage: string;
   message: string;
+  category?: string | null;
+  expected_reply_rate?: string | null;
+  description?: string | null;
+}
+
+const PRESET_CATEGORY_META: Record<string, { label: string; emoji: string; order: number }> = {
+  elite: { label: 'Elite High-Response', emoji: '🔥', order: 1 },
+  gift_leads: { label: 'Gift Leads', emoji: '🎁', order: 2 },
+  competitor_intel: { label: 'Competitor Intel', emoji: '📊', order: 3 },
+  ad_intel: { label: 'Ad Intelligence', emoji: '🔴', order: 4 },
+  ai_intel: { label: 'AI Search Intel', emoji: '🤖', order: 5 },
+  revenue_loss: { label: 'Revenue Loss', emoji: '💰', order: 6 },
+  website_intel: { label: 'Website Intel', emoji: '🌐', order: 7 },
+  sms_outreach: { label: 'SMS Outreach', emoji: '📱', order: 8 },
+  whatsapp_outreach: { label: 'WhatsApp Outreach', emoji: '💬', order: 9 },
+  booking: { label: 'Booking', emoji: '📅', order: 10 },
+  closing: { label: 'Closing', emoji: '🏆', order: 11 },
+};
+
+function presetCategoryMeta(c: string | null | undefined) {
+  return PRESET_CATEGORY_META[c || ''] || { label: c || 'Other', emoji: '✨', order: 50 };
+}
+
+function replyRateColor(rate: string | null | undefined): string {
+  if (!rate) return 'bg-prospex-bg text-prospex-dim border-prospex-border';
+  const m = rate.match(/(\d+)/);
+  if (!m) return 'bg-prospex-bg text-prospex-dim border-prospex-border';
+  const n = parseInt(m[1], 10);
+  if (n >= 20) return 'bg-prospex-green/20 text-prospex-green border-prospex-green/40';
+  if (n >= 10) return 'bg-amber-500/20 text-amber-400 border-amber-500/40';
+  return 'bg-prospex-red/20 text-prospex-red border-prospex-red/40';
 }
 
 const TEMPLATES: Template[] = [
@@ -113,8 +144,11 @@ export default function OutreachBlaster({ isOpen, onClose, channel, leads }: Pro
   const [editedMessage, setEditedMessage] = useState('');
   const [sentIds, setSentIds] = useState<Set<string>>(new Set());
   const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
+  const [presets, setPresets] = useState<Template[]>([]);
+  const [presetsLoading, setPresetsLoading] = useState(false);
 
-  const template = TEMPLATES.find(t => t.id === templateId);
+  const allTemplates = useMemo(() => [...presets, ...TEMPLATES], [presets]);
+  const template = allTemplates.find(t => t.id === templateId);
   const currentLead: BlasterLead | undefined = eligibleLeads[currentIndex];
 
   // Reset state when opened or channel changes
@@ -126,6 +160,35 @@ export default function OutreachBlaster({ isOpen, onClose, channel, leads }: Pro
       setSkippedIds(new Set());
       setTemplateId('cold-1');
     }
+  }, [isOpen, channel]);
+
+  // Load presets matching the active channel
+  useEffect(() => {
+    if (!isOpen) return;
+    setPresetsLoading(true);
+    fetch('/api/dm-campaigns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'get_presets' }),
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (!data.success || !Array.isArray(data.presets)) return;
+        const filtered: Template[] = data.presets
+          .filter((p: { channel: string | null }) => p.channel === channel)
+          .map((p: { id: string; name: string; description: string | null; category: string | null; expected_reply_rate: string | null; script_template: string }) => ({
+            id: `preset:${p.id}`,
+            name: p.name,
+            stage: p.category || 'preset',
+            message: p.script_template,
+            category: p.category,
+            expected_reply_rate: p.expected_reply_rate,
+            description: p.description,
+          }));
+        setPresets(filtered);
+      })
+      .catch(() => {})
+      .finally(() => setPresetsLoading(false));
   }, [isOpen, channel]);
 
   // Refill message when lead or template changes during sending
@@ -224,24 +287,83 @@ export default function OutreachBlaster({ isOpen, onClose, channel, leads }: Pro
                 <>
                   <div>
                     <p className="text-xs font-mono text-prospex-dim uppercase mb-2">Pick a Template</p>
-                    <div className="space-y-1.5 max-h-[320px] overflow-y-auto">
-                      {TEMPLATES.map(t => (
-                        <button
-                          key={t.id}
-                          onClick={() => setTemplateId(t.id)}
-                          className={`w-full text-left p-3 rounded-lg border transition-colors ${
-                            templateId === t.id
-                              ? 'bg-prospex-cyan/10 border-prospex-cyan/40'
-                              : 'bg-prospex-bg border-prospex-border hover:border-prospex-cyan/30'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-1">
-                            <p className="text-xs font-medium text-prospex-text">{t.name}</p>
-                            <span className="text-[8px] px-1.5 py-0.5 rounded bg-prospex-surface text-prospex-dim font-mono">{t.stage}</span>
-                          </div>
-                          <p className="text-[10px] text-prospex-muted line-clamp-2">{t.message}</p>
-                        </button>
-                      ))}
+                    <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                      {/* Presets — grouped by category */}
+                      {presetsLoading && (
+                        <div className="text-center py-3"><Loader2 className="w-4 h-4 animate-spin text-prospex-cyan mx-auto" /></div>
+                      )}
+                      {!presetsLoading && presets.length > 0 && (() => {
+                        const grouped: Record<string, Template[]> = {};
+                        for (const p of presets) {
+                          const k = p.category || 'preset';
+                          (grouped[k] = grouped[k] || []).push(p);
+                        }
+                        const cats = Object.keys(grouped).sort((a, b) => presetCategoryMeta(a).order - presetCategoryMeta(b).order);
+                        return cats.map(cat => {
+                          const meta = presetCategoryMeta(cat);
+                          return (
+                            <div key={cat}>
+                              <p className="text-[10px] font-mono text-prospex-text uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                                <span>{meta.emoji}</span><span>{meta.label}</span>
+                                <span className="text-prospex-dim font-normal">({grouped[cat].length})</span>
+                              </p>
+                              <div className="space-y-1.5">
+                                {grouped[cat].map(t => (
+                                  <button
+                                    key={t.id}
+                                    onClick={() => setTemplateId(t.id)}
+                                    className={`w-full text-left p-3 rounded-lg border transition-colors ${
+                                      templateId === t.id
+                                        ? 'bg-prospex-cyan/10 border-prospex-cyan/40'
+                                        : 'bg-prospex-bg border-prospex-border hover:border-prospex-cyan/30'
+                                    }`}
+                                  >
+                                    <div className="flex items-start justify-between gap-2 mb-1">
+                                      <p className="text-xs font-medium text-prospex-text leading-tight flex-1 min-w-0">{t.name}</p>
+                                      {t.expected_reply_rate && (
+                                        <span className={`badge text-[9px] shrink-0 ${replyRateColor(t.expected_reply_rate)}`}>
+                                          {t.expected_reply_rate}
+                                        </span>
+                                      )}
+                                    </div>
+                                    {t.description && (
+                                      <p className="text-[10px] text-prospex-muted line-clamp-1 mb-1">{t.description}</p>
+                                    )}
+                                    <p className="text-[10px] text-prospex-dim line-clamp-2">{t.message}</p>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        });
+                      })()}
+
+                      {/* Quick Templates — fallback hardcoded list */}
+                      <div>
+                        <p className="text-[10px] font-mono text-prospex-text uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                          <span>⚡</span><span>Quick Templates</span>
+                          <span className="text-prospex-dim font-normal">({TEMPLATES.length})</span>
+                        </p>
+                        <div className="space-y-1.5">
+                          {TEMPLATES.map(t => (
+                            <button
+                              key={t.id}
+                              onClick={() => setTemplateId(t.id)}
+                              className={`w-full text-left p-3 rounded-lg border transition-colors ${
+                                templateId === t.id
+                                  ? 'bg-prospex-cyan/10 border-prospex-cyan/40'
+                                  : 'bg-prospex-bg border-prospex-border hover:border-prospex-cyan/30'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between mb-1">
+                                <p className="text-xs font-medium text-prospex-text">{t.name}</p>
+                                <span className="text-[8px] px-1.5 py-0.5 rounded bg-prospex-surface text-prospex-dim font-mono">{t.stage}</span>
+                              </div>
+                              <p className="text-[10px] text-prospex-muted line-clamp-2">{t.message}</p>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   </div>
 
