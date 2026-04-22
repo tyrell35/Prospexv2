@@ -18,6 +18,8 @@ export async function POST(request: NextRequest) {
 
     switch (action) {
       case 'get_campaigns': return getCampaigns();
+      case 'get_presets': return getPresets();
+      case 'clone_preset': return clonePreset(body);
       case 'create_campaign': return createCampaign(body);
       case 'update_campaign': return updateCampaign(body);
       case 'delete_campaign': return deleteCampaign(body);
@@ -67,12 +69,54 @@ export async function GET(request: NextRequest) {
 // ─── CAMPAIGNS ──────────────────────────────────────────
 
 async function getCampaigns() {
+  // User-created campaigns only (presets live in the gallery via get_presets)
   const { data, error } = await supabase
     .from('dm_campaigns')
     .select('*')
+    .or('is_preset.eq.false,is_preset.is.null')
     .order('created_at', { ascending: false });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ success: true, campaigns: data || [] });
+}
+
+async function getPresets() {
+  const { data, error } = await supabase
+    .from('dm_campaigns')
+    .select('id, name, description, channel, campaign_type, category, expected_reply_rate, script_template, script_variants, follow_up_scripts')
+    .eq('is_preset', true)
+    .order('category', { ascending: true })
+    .order('name', { ascending: true });
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ success: true, presets: data || [] });
+}
+
+async function clonePreset(body: { preset_id: string; new_name?: string }) {
+  if (!body.preset_id) return NextResponse.json({ error: 'preset_id required' }, { status: 400 });
+
+  const { data: preset, error: pErr } = await supabase
+    .from('dm_campaigns')
+    .select('*')
+    .eq('id', body.preset_id)
+    .single();
+  if (pErr || !preset) return NextResponse.json({ error: pErr?.message || 'Preset not found' }, { status: 404 });
+
+  const p = preset as Record<string, unknown>;
+  // Strip identity + counters; copy everything else
+  const exclude = new Set(['id', 'created_at', 'updated_at', 'total_queued', 'total_sent', 'total_replied', 'total_positive', 'total_booked', 'reply_rate', 'is_preset']);
+  const newRow: Record<string, unknown> = { is_preset: false, status: 'draft' };
+  for (const [key, val] of Object.entries(p)) {
+    if (exclude.has(key)) continue;
+    newRow[key] = val;
+  }
+  newRow.name = body.new_name || `${p.name as string} (copy)`;
+
+  const { data, error } = await supabase
+    .from('dm_campaigns')
+    .insert(newRow)
+    .select()
+    .single();
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ success: true, campaign: data });
 }
 
 interface CreateCampaignBody {

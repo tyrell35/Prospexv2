@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import {
   Rocket, Plus, Play, Pause, Trash2, Download, BarChart3, Hammer,
   CheckCircle, XCircle, MessageCircle, Instagram, Phone, Loader2, Filter,
-  ListChecks, Users, Activity, X, RefreshCw, AlertCircle,
+  ListChecks, Users, Activity, X, RefreshCw, AlertCircle, Sparkles, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -72,6 +72,49 @@ interface VariantStat {
   positive: number;
   reply_rate: number;
   positive_rate: number;
+}
+
+interface Preset {
+  id: string;
+  name: string;
+  description: string | null;
+  channel: string | null;
+  campaign_type: string | null;
+  category: string | null;
+  expected_reply_rate: string | null;
+  script_template: string;
+  script_variants: Array<{ id: string; message: string }> | null;
+  follow_up_scripts: Array<{ message: string }> | null;
+}
+
+const CATEGORY_META: Record<string, { label: string; emoji: string; order: number }> = {
+  elite: { label: 'Elite High-Response', emoji: '🔥', order: 1 },
+  gift_leads: { label: 'Gift Leads', emoji: '🎁', order: 2 },
+  competitor_intel: { label: 'Competitor Intel', emoji: '📊', order: 3 },
+  ad_intel: { label: 'Ad Intelligence', emoji: '🔴', order: 4 },
+  ai_intel: { label: 'AI Search Intel', emoji: '🤖', order: 5 },
+  revenue_loss: { label: 'Revenue Loss', emoji: '💰', order: 6 },
+  website_intel: { label: 'Website Intel', emoji: '🌐', order: 7 },
+  sms_outreach: { label: 'SMS Outreach', emoji: '📱', order: 8 },
+  whatsapp_outreach: { label: 'WhatsApp Outreach', emoji: '💬', order: 9 },
+  booking: { label: 'Booking', emoji: '📅', order: 10 },
+  closing: { label: 'Closing', emoji: '🏆', order: 11 },
+  custom: { label: 'Custom', emoji: '✨', order: 99 },
+};
+
+function categoryMeta(c: string | null) {
+  return CATEGORY_META[c || 'custom'] || { label: c || 'Other', emoji: '✨', order: 50 };
+}
+
+function replyRateColor(rate: string | null): string {
+  if (!rate) return 'bg-prospex-bg text-prospex-dim border-prospex-border';
+  // Parse first number in the string ("12-20%", "35-45%", "N/A — closing script")
+  const m = rate.match(/(\d+)/);
+  if (!m) return 'bg-prospex-bg text-prospex-dim border-prospex-border';
+  const n = parseInt(m[1], 10);
+  if (n >= 20) return 'bg-prospex-green/20 text-prospex-green border-prospex-green/40';
+  if (n >= 10) return 'bg-amber-500/20 text-amber-400 border-amber-500/40';
+  return 'bg-prospex-red/20 text-prospex-red border-prospex-red/40';
 }
 
 // ─── HELPERS ────────────────────────────────────────────
@@ -178,6 +221,7 @@ function CampaignsTab() {
   const [showForm, setShowForm] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [stats, setStats] = useState<Record<string, VariantStat[]>>({});
+  const [galleryOpen, setGalleryOpen] = useState(true);
 
   const refresh = async () => {
     setLoading(true);
@@ -259,6 +303,35 @@ function CampaignsTab() {
       </div>
 
       {showForm && <CampaignForm onClose={() => setShowForm(false)} onCreated={() => { setShowForm(false); refresh(); }} />}
+
+      {/* Preset Gallery */}
+      <div className="card">
+        <button
+          onClick={() => setGalleryOpen(!galleryOpen)}
+          className="w-full flex items-center justify-between p-4 hover:bg-prospex-bg/30 transition-colors"
+        >
+          <div className="flex items-center gap-3">
+            <Sparkles className="w-4 h-4 text-prospex-cyan" />
+            <div className="text-left">
+              <h3 className="text-sm font-mono font-bold text-prospex-text">Preset Gallery</h3>
+              <p className="text-[10px] text-prospex-dim">Pre-built campaigns — pick one to use as a starting point</p>
+            </div>
+          </div>
+          {galleryOpen ? <ChevronDown className="w-4 h-4 text-prospex-dim" /> : <ChevronRight className="w-4 h-4 text-prospex-dim" />}
+        </button>
+        {galleryOpen && (
+          <div className="border-t border-prospex-border p-4">
+            <PresetGallery onCloned={() => refresh()} />
+          </div>
+        )}
+      </div>
+
+      {/* User campaigns header */}
+      <div className="flex items-center gap-2 pt-2">
+        <h3 className="text-xs font-mono text-prospex-dim uppercase tracking-wider">Your Campaigns</h3>
+        <div className="flex-1 h-px bg-prospex-border/50" />
+      </div>
+
 
       {loading ? (
         <div className="card p-8 text-center"><Loader2 className="w-5 h-5 animate-spin text-prospex-cyan mx-auto" /></div>
@@ -342,6 +415,88 @@ function CampaignsTab() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── PRESET GALLERY ─────────────────────────────────────
+
+function PresetGallery({ onCloned }: { onCloned: () => void }) {
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [cloningId, setCloningId] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const res = await api<{ success: boolean; presets: Preset[] }>('get_presets');
+      setPresets(res.presets || []);
+      setLoading(false);
+    })();
+  }, []);
+
+  const handleClone = async (preset: Preset) => {
+    setCloningId(preset.id);
+    const res = await api<{ success: boolean; campaign?: Campaign; error?: string }>('clone_preset', { preset_id: preset.id });
+    setCloningId(null);
+    if (res.success) {
+      onCloned();
+    } else {
+      alert(`Clone failed: ${res.error || 'unknown error'}`);
+    }
+  };
+
+  if (loading) return <div className="py-6 text-center"><Loader2 className="w-5 h-5 animate-spin text-prospex-cyan mx-auto" /></div>;
+  if (presets.length === 0) return <p className="text-xs text-prospex-dim text-center py-4">No presets seeded.</p>;
+
+  // Group by category
+  const grouped: Record<string, Preset[]> = {};
+  for (const p of presets) {
+    const k = p.category || 'custom';
+    if (!grouped[k]) grouped[k] = [];
+    grouped[k].push(p);
+  }
+  const sortedCategories = Object.keys(grouped).sort((a, b) => categoryMeta(a).order - categoryMeta(b).order);
+
+  return (
+    <div className="space-y-5">
+      {sortedCategories.map(cat => {
+        const meta = categoryMeta(cat);
+        return (
+          <div key={cat}>
+            <h4 className="text-[11px] font-mono text-prospex-text uppercase tracking-wider mb-2 flex items-center gap-2">
+              <span>{meta.emoji}</span>
+              <span>{meta.label}</span>
+              <span className="text-prospex-dim font-normal">({grouped[cat].length})</span>
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {grouped[cat].map(p => (
+                <div key={p.id} className="bg-prospex-bg border border-prospex-border rounded-lg p-3 hover:border-prospex-cyan/30 transition-colors">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <p className="text-xs font-medium text-prospex-text leading-tight flex-1 min-w-0">{p.name}</p>
+                    {channelIcon(p.channel)}
+                  </div>
+                  {p.description && (
+                    <p className="text-[10px] text-prospex-muted line-clamp-2 mb-2">{p.description}</p>
+                  )}
+                  <div className="flex items-center justify-between gap-2">
+                    <span className={cn('badge text-[9px]', replyRateColor(p.expected_reply_rate))}>
+                      {p.expected_reply_rate || 'N/A'}
+                    </span>
+                    <button
+                      onClick={() => handleClone(p)}
+                      disabled={cloningId === p.id}
+                      className="text-[10px] px-2 py-1 rounded bg-prospex-cyan/10 text-prospex-cyan border border-prospex-cyan/30 hover:bg-prospex-cyan/20 disabled:opacity-50 flex items-center gap-1"
+                    >
+                      {cloningId === p.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                      Use Template
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
