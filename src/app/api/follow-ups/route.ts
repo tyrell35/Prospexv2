@@ -12,12 +12,14 @@ const supabase = createClient(
 // social proof → mini audit → breakup → reactivation
 // ═══════════════════════════════════════════════════════
 
-// Cumulative day offsets from sequence start (step 0 = day 0)
-const STEP_DAY_OFFSETS = [0, 2, 5, 7, 10, 14];
-const STEP_TYPES = ['cold_open', 'value_add', 'competitor_move', 'social_proof', 'mini_audit', 'breakup'];
-const STEP_LABELS = ['Cold Open', 'Value Add', 'Competitor Move', 'Social Proof', 'Mini Audit (Free)', 'Breakup'];
+// Cumulative day offsets from sequence start (step 0 = day 0; final step = reactivation @ day 45)
+const STEP_DAY_OFFSETS = [0, 2, 5, 7, 10, 14, 45];
+const STEP_TYPES = ['cold_open', 'value_add', 'competitor_move', 'social_proof', 'mini_audit', 'breakup', 'reactivation'];
+const STEP_LABELS = ['Cold Open', 'Value Add', 'Competitor Move', 'Social Proof', 'Mini Audit (Free)', 'Breakup', 'Reactivation'];
+const MAX_STEPS = STEP_TYPES.length - 1; // 6 — index of final step (reactivation)
 
-// Default messages — used when no preset is wired into the sequence's campaign.
+// Default messages — used as fallback when the sequence's campaign doesn't supply
+// a script_template (step 0) or follow_up_scripts entry (steps 1+).
 const DEFAULT_STEP_MESSAGES: Record<string, string> = {
   cold_open: `Hey {{firstName}} 👋 quick question — are you currently running paid ads for {{clinicName}} or relying on word-of-mouth?`,
   value_add: `Hey {{firstName}} — sharing this because it's relevant: aesthetic clinics in {{city}} that publish 2 short-form videos per week are pulling 3-5x the enquiries of clinics that don't. Most of your competitors aren't doing it. Worth a 5-min look?`,
@@ -25,7 +27,26 @@ const DEFAULT_STEP_MESSAGES: Record<string, string> = {
   social_proof: `Hey {{firstName}} — quick story: clinic about your size went from 23 Google reviews to 180+ in 90 days, jumped to #1 in the map pack, and 3x'd monthly bookings. Same playbook would work for {{clinicName}}. Want the 2-min version?`,
   mini_audit: `Hey {{firstName}} — I ran a quick check on {{clinicName}}'s online presence (no charge, just curious). 3 things stood out that are likely costing you bookings. Want me to send the findings?`,
   breakup: `Hey {{firstName}} — I've reached out a few times and I get it, you're flat out. I'll close your file on my end. If you ever want to look at filling more {{niche}} appointments, I'm here. No hard feelings either way 👊`,
+  reactivation: `Hey {{firstName}} — quick one. We chatted (or tried to) ~6 weeks ago about {{clinicName}}. Things have changed our end since then — new playbook for {{niche}} clinics in {{city}} that's been working really well. Worth a 2-min look or still not the right time?`,
 };
+
+interface CampaignScripts {
+  id: string;
+  script_template: string | null;
+  follow_up_scripts: Array<{ message: string }> | null;
+}
+
+// Resolve the message for a given step from a campaign's scripts, falling back to defaults.
+// step 0 = cold open (uses campaign.script_template). step N>0 = follow_up_scripts[N-1].
+function resolveStepMessage(stepIndex: number, campaign: CampaignScripts | null): string {
+  const stepType = STEP_TYPES[stepIndex] || 'cold_open';
+  const fallback = DEFAULT_STEP_MESSAGES[stepType] || DEFAULT_STEP_MESSAGES.cold_open;
+  if (!campaign) return fallback;
+  if (stepIndex === 0) return campaign.script_template || fallback;
+  const fuIndex = stepIndex - 1;
+  const fu = (campaign.follow_up_scripts || [])[fuIndex];
+  return fu?.message || fallback;
+}
 
 interface SeqLeadJoin {
   id: string;
@@ -102,6 +123,7 @@ export async function POST(request: NextRequest) {
       case 'mark_replied': return markReplied(body);
       case 'mark_dead': return markDead(body);
       case 'skip_step': return skipStep(body);
+      case 'schedule_reactivations': return scheduleReactivations();
       default:
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
     }
@@ -109,6 +131,24 @@ export async function POST(request: NextRequest) {
     const msg = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+}
+
+// ─── GET handler for Vercel Crons ───────────────────────
+export async function GET(request: NextRequest) {
+  const url = new URL(request.url);
+  const cron = url.searchParams.get('cron');
+  if (!cron) return NextResponse.json({ error: 'cron param required' }, { status: 400 });
+
+  const expected = process.env.CRON_SECRET;
+  if (expected) {
+    const auth = request.headers.get('authorization') || '';
+    if (auth !== `Bearer ${expected}`) {
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    }
+  }
+
+  if (cron === 'schedule_reactivations') return scheduleReactivations();
+  return NextResponse.json({ error: `Unknown cron: ${cron}` }, { status: 400 });
 }
 
 // ─── QUEUE / STATS / COMPLETED ──────────────────────────
@@ -128,13 +168,25 @@ async function getQueue() {
     .limit(500);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const sequences = (data || []) as Sequence[];
 
-  const queue = (data || []).map(rawSeq => {
-    const seq = rawSeq as Sequence;
+  // Batch-fetch every referenced campaign so we can use its preset scripts
+  const campaignIds = Array.from(new Set(sequences.map(s => s.campaign_id).filter((x): x is string => !!x)));
+  const campaignsById = new Map<string, CampaignScripts>();
+  if (campaignIds.length > 0) {
+    const { data: camps } = await supabase
+      .from('dm_campaigns')
+      .select('id, script_template, follow_up_scripts')
+      .in('id', campaignIds);
+    for (const c of camps || []) campaignsById.set((c as CampaignScripts).id, c as CampaignScripts);
+  }
+
+  const queue = sequences.map(seq => {
     const stepIndex = seq.current_step;
     const stepType = STEP_TYPES[stepIndex] || `step_${stepIndex}`;
     const stepLabel = STEP_LABELS[stepIndex] || `Step ${stepIndex + 1}`;
-    const baseMessage = DEFAULT_STEP_MESSAGES[stepType] || DEFAULT_STEP_MESSAGES.cold_open;
+    const campaign = seq.campaign_id ? campaignsById.get(seq.campaign_id) || null : null;
+    const baseMessage = resolveStepMessage(stepIndex, campaign);
     const personalised = fillTemplate(baseMessage, seq.leads || null);
     const lastSent = seq.last_touchpoint_at ? new Date(seq.last_touchpoint_at) : new Date(seq.started_at);
     const daysSinceLast = Math.floor((Date.now() - lastSent.getTime()) / (1000 * 60 * 60 * 24));
@@ -147,6 +199,8 @@ async function getQueue() {
       message: personalised,
       days_since_last: daysSinceLast,
       is_overdue: isOverdue,
+      message_source: campaign && (stepIndex === 0 ? campaign.script_template : (campaign.follow_up_scripts || [])[stepIndex - 1]?.message)
+        ? 'campaign' : 'default',
     };
   });
 
@@ -232,7 +286,7 @@ async function startSequence(body: StartSequenceBody) {
       channel,
       status: 'active',
       current_step: 0,
-      max_steps: STEP_TYPES.length - 1,
+      max_steps: MAX_STEPS,
       started_at: now.toISOString(),
       next_touchpoint_at: nextDate.toISOString(),
       touchpoints: [],
@@ -344,6 +398,47 @@ async function markDead(body: { sequence_id: string; reason?: string }) {
     updated_at: now,
   }).eq('id', body.sequence_id);
   return NextResponse.json({ success: true });
+}
+
+// ─── REACTIVATION SCHEDULER (Day 45) ────────────────────
+// Picks up completed sequences whose breakup landed >=45 days ago and
+// reopens them at the reactivation step. Idempotent — won't re-add if
+// the sequence already has a reactivation touchpoint logged.
+
+async function scheduleReactivations() {
+  const cutoff = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
+
+  const { data: candidates, error } = await supabase
+    .from('follow_up_sequences')
+    .select('id, lead_id, channel, campaign_id, completed_at, last_touchpoint_at, touchpoints, current_step, max_steps')
+    .eq('status', 'completed')
+    .lte('completed_at', cutoff)
+    .limit(500);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  let reactivated = 0;
+  const now = new Date().toISOString();
+
+  for (const raw of candidates || []) {
+    const seq = raw as Sequence;
+    const tps = seq.touchpoints || [];
+    // Skip if reactivation touchpoint already exists
+    if (tps.some(tp => tp.type === 'reactivation' || tp.step === MAX_STEPS)) continue;
+
+    // Bring the sequence back to life at the reactivation step
+    await supabase.from('follow_up_sequences').update({
+      status: 'active',
+      current_step: MAX_STEPS,
+      max_steps: MAX_STEPS,
+      next_touchpoint_at: now,
+      completed_at: null,
+      updated_at: now,
+    }).eq('id', seq.id);
+
+    reactivated++;
+  }
+
+  return NextResponse.json({ success: true, reactivated, scanned: (candidates || []).length });
 }
 
 async function skipStep(body: { sequence_id: string }) {

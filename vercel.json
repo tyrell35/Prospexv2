@@ -15,6 +15,10 @@
     {
       "path": "/api/dm-campaigns?cron=schedule_follow_ups",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/follow-ups?cron=schedule_reactivations",
+      "schedule": "0 6 * * *"
     }
   ]
 }

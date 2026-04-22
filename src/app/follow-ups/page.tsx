@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   Clock, AlertTriangle, Calendar, Activity, Loader2, Copy, Check, ExternalLink,
   MessageCircle, Instagram, Phone, Trophy, Skull, SkipForward, ChevronDown, ChevronRight,
-  RefreshCw, Plus, X, Search, Sparkles, Send, Mail,
+  RefreshCw, Plus, X, Search, Sparkles, Send, Mail, Smile, Meh, Frown,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
@@ -136,6 +136,7 @@ export default function FollowUpsPage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [completedOpen, setCompletedOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [replyModalItem, setReplyModalItem] = useState<QueueItem | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -181,10 +182,14 @@ export default function FollowUpsPage() {
     refresh();
   };
 
-  const handleReplied = async (item: QueueItem) => {
-    const sentiment = prompt('Reply sentiment? (positive / negative / neutral)', 'positive') as 'positive' | 'negative' | 'neutral' | null;
-    if (!sentiment) return;
-    await api('mark_replied', { sequence_id: item.sequence.id, sentiment });
+  const handleReplied = (item: QueueItem) => {
+    setReplyModalItem(item);
+  };
+
+  const submitReply = async (sentiment: 'positive' | 'negative' | 'neutral', replyText: string) => {
+    if (!replyModalItem) return;
+    await api('mark_replied', { sequence_id: replyModalItem.sequence.id, sentiment, reply_text: replyText || undefined });
+    setReplyModalItem(null);
     refresh();
   };
 
@@ -397,6 +402,88 @@ export default function FollowUpsPage() {
       </div>
 
       {showAddModal && <AddToSequenceModal onClose={() => setShowAddModal(false)} onCreated={() => { setShowAddModal(false); refresh(); }} />}
+      {replyModalItem && (
+        <ReplyModal
+          leadName={replyModalItem.sequence.leads?.business_name || 'lead'}
+          onClose={() => setReplyModalItem(null)}
+          onSubmit={submitReply}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── REPLY SENTIMENT MODAL ──────────────────────────────
+
+function ReplyModal({ leadName, onClose, onSubmit }: {
+  leadName: string;
+  onClose: () => void;
+  onSubmit: (sentiment: 'positive' | 'negative' | 'neutral', replyText: string) => void | Promise<void>;
+}) {
+  const [sentiment, setSentiment] = useState<'positive' | 'negative' | 'neutral' | null>(null);
+  const [replyText, setReplyText] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async () => {
+    if (!sentiment) return;
+    setSubmitting(true);
+    await onSubmit(sentiment, replyText);
+    setSubmitting(false);
+  };
+
+  const options: Array<{ key: 'positive' | 'negative' | 'neutral'; label: string; help: string; icon: typeof Smile; cls: string }> = [
+    { key: 'positive', label: 'Positive', help: 'Interested · asked questions · wants more info', icon: Smile, cls: 'bg-prospex-green/20 text-prospex-green border-prospex-green/40 hover:bg-prospex-green/30' },
+    { key: 'neutral', label: 'Neutral', help: 'Acknowledged · curious · not yet committed', icon: Meh, cls: 'bg-amber-500/20 text-amber-400 border-amber-500/40 hover:bg-amber-500/30' },
+    { key: 'negative', label: 'Negative', help: 'Not interested · unsubscribe · hostile', icon: Frown, cls: 'bg-prospex-red/20 text-prospex-red border-prospex-red/40 hover:bg-prospex-red/30' },
+  ];
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-prospex-surface border border-prospex-border rounded-xl w-full max-w-lg mx-2 md:mx-auto" onClick={e => e.stopPropagation()}>
+        <div className="p-4 border-b border-prospex-border flex items-center justify-between">
+          <h2 className="text-sm font-mono font-bold text-prospex-text flex items-center gap-2">
+            <MessageCircle className="w-4 h-4" /> Log Reply — {leadName}
+          </h2>
+          <button onClick={onClose} className="text-prospex-dim hover:text-prospex-text"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          <div>
+            <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-2">Sentiment</label>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              {options.map(opt => {
+                const Icon = opt.icon;
+                const active = sentiment === opt.key;
+                return (
+                  <button key={opt.key} onClick={() => setSentiment(opt.key)}
+                    className={cn('p-3 rounded-lg border transition-all text-left',
+                      active ? opt.cls : 'bg-prospex-bg border-prospex-border text-prospex-muted hover:text-prospex-text')}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <Icon className="w-4 h-4" />
+                      <span className="text-xs font-semibold font-mono">{opt.label}</span>
+                    </div>
+                    <p className="text-[10px] opacity-80 leading-tight">{opt.help}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Reply Text (optional)</label>
+            <textarea value={replyText} onChange={e => setReplyText(e.target.value)} rows={3}
+              placeholder="Paste their reply for the record"
+              className="w-full bg-prospex-bg border border-prospex-border rounded-lg p-2 text-xs text-prospex-text resize-none focus:border-prospex-cyan/50 focus:outline-none font-mono leading-relaxed" />
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-prospex-border flex items-center justify-end gap-2">
+          <button onClick={onClose} className="btn-ghost text-xs">Cancel</button>
+          <button onClick={handleSubmit} disabled={!sentiment || submitting} className="btn-primary text-xs disabled:opacity-50">
+            {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Log Reply
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
