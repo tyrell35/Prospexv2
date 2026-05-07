@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
 
 const CHANNEL_CONFIGS: Record<string, { maxChars: number; style: string }> = {
   instagram: { maxChars: 500, style: 'Casual, conversational, short. No formal greeting. Use their first name if possible. Must be under 500 characters total. No links.' },
