@@ -8,6 +8,7 @@ import { cn, getScoreColor, getSourceConfig, getPriorityConfig, formatDate } fro
 import type { Lead, TableSort, TableFilter } from '@/lib/types';
 import QuickMessage from '@/components/QuickMessage';
 import OutreachBlaster from '@/components/OutreachBlaster';
+import ExportLeadsModal from '@/components/ExportLeadsModal';
 import { Zap } from 'lucide-react';
 
 const PAGE_SIZE = 50;
@@ -62,6 +63,7 @@ export default function LeadsPage() {
   const [msgChannel, setMsgChannel] = useState<'whatsapp' | 'instagram'>('whatsapp');
   const [msgLead, setMsgLead] = useState<Lead | null>(null);
   const [blasterChannel, setBlasterChannel] = useState<null | 'whatsapp' | 'instagram'>(null);
+  const [exportOpen, setExportOpen] = useState(false);
 
   // Unique values for filter dropdowns
   const [uniqueNiches, setUniqueNiches] = useState<string[]>([]);
@@ -191,7 +193,11 @@ export default function LeadsPage() {
             <button onClick={handleExportCSV} className="btn-primary text-xs"><Download className="w-3.5 h-3.5" /> Export ({selectedIds.size})</button>
             <button onClick={handleBulkDelete} className="btn-danger text-xs"><Trash2 className="w-3.5 h-3.5" /> Delete ({selectedIds.size})</button>
           </>)}
-          {selectedIds.size === 0 && <button onClick={handleExportCSV} className="btn-ghost text-xs"><Download className="w-3.5 h-3.5" /> Export All</button>}
+          {selectedIds.size === 0 && (
+            <button onClick={() => setExportOpen(true)} className="btn-ghost text-xs" title="Export with country filter & format options (Standard / Meta / Skool)">
+              <Download className="w-3.5 h-3.5" /> Export
+            </button>
+          )}
         </div>
 
         {/* Expanded Filters */}
@@ -315,6 +321,9 @@ export default function LeadsPage() {
         channel={blasterChannel || 'whatsapp'}
         leads={leads.filter(l => selectedIds.has(l.id))}
       />
+
+      {/* Export Modal */}
+      <ExportLeadsModal isOpen={exportOpen} onClose={() => setExportOpen(false)} />
     </div>
   );
 }
