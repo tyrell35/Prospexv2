@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 function getKey(envKey: string): string {
   return process.env[envKey] || '';
@@ -104,6 +105,7 @@ function calculateAuditScore(checks: Record<string, boolean | number | null>): n
 }
 
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   let parsedLeadId: string | null = null;
   try {
     const { leadId } = await request.json();

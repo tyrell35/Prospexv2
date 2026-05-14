@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ─── TYPES ───────────────────────────────────────────────────────
 interface MetaAd {
@@ -430,6 +431,7 @@ async function saveProspects(
 
 // ─── MAIN HANDLER ────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const metaToken = process.env.META_AD_LIBRARY_TOKEN;
     if (!metaToken) {
@@ -555,6 +557,7 @@ export async function POST(req: NextRequest) {
 
 // ─── GET: Retrieve cached prospects with filters ─────────────────
 export async function GET(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const country = searchParams.get('country') || 'GB';

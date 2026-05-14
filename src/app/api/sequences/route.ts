@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ─── GET: List sequences or single sequence ──────────────────────
 export async function GET(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
@@ -52,6 +54,7 @@ export async function GET(req: NextRequest) {
 
 // ─── POST: Create sequence, enroll leads, or generate AI message ─
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
     const { action = 'create' } = body;
@@ -286,6 +289,7 @@ Return ONLY the message text. For email, start with "Subject: " on the first lin
 
 // ─── PUT: Update sequence ────────────────────────────────────────
 export async function PUT(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
     const { id, ...updates } = body;
@@ -308,6 +312,7 @@ export async function PUT(req: NextRequest) {
 
 // ─── DELETE: Remove sequence ─────────────────────────────────────
 export async function DELETE(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ═══════════════════════════════════════════════════════════════
 // AD DETECTION ENGINE — 3-Layer Intelligence
@@ -356,6 +357,7 @@ function determineOverallStatus(
 
 // ═══ MAIN HANDLER ═══
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await request.json();
     const { action = 'detect' } = body;

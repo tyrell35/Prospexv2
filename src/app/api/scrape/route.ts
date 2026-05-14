@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 function getKey(envKey: string): string { return process.env[envKey] || ''; }
 
@@ -665,6 +666,7 @@ async function enrichLeadsBatch(leads: LeadResult[], maxConcurrent: number = 3):
 
 // ─── MAIN HANDLER ──────────────────────────────────────────────
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { niche, location, country = 'United Kingdom', source, lat, lng } = await request.json();
     if (!niche || !location) {
@@ -804,6 +806,7 @@ export async function POST(request: NextRequest) {
 
 // PUT: Batch-save leads from city scraper
 export async function PUT(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { leads, niche, country } = await request.json();
     if (!leads || !Array.isArray(leads) || leads.length === 0) {

@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { verifyWebhookSecret } from '@/lib/api-auth';
 
 // Make.com webhook — fires when a playbook is generated
 export async function POST(request: NextRequest) {
+  const reject = verifyWebhookSecret(request, 'PLAYBOOK_WEBHOOK_SECRET');
+  if (reject) return reject;
   try {
     const body = await request.json();
     const { lead_id, playbook_id } = body;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 const CHANNEL_CONFIGS: Record<string, { maxChars: number; style: string }> = {
   instagram: { maxChars: 500, style: 'Casual, conversational, short. No formal greeting. Use their first name if possible. Must be under 500 characters total. No links.' },
@@ -62,6 +63,7 @@ Return ONLY the message text. For email, start with "Subject: " on the first lin
 }
 
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {

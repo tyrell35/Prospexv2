@@ -218,6 +218,14 @@ function calculateQualificationScore(lead: Record<string, unknown>, tier: number
 
 // ─── MAIN HANDLER ──────────────────────────────────────────
 export async function GET(request: NextRequest) {
+  // Cron-only: validate the Vercel cron Bearer if CRON_SECRET is set.
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    const auth = request.headers.get('authorization') || '';
+    if (auth !== `Bearer ${cronSecret}`) {
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    }
+  }
   try {
     const { searchParams } = new URL(request.url);
     const count = parseInt(searchParams.get('count') || '3', 10);

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ─── INSTAGRAM VALIDATION ────────────────────────────────────────
 
@@ -321,6 +322,7 @@ async function enrichFromWebsite(website: string): Promise<{
 
 // ─── MAIN: POST — Validate + enrich single lead or batch ─────────
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
     const { lead_id, lead_ids, crawl_website = true } = body;
@@ -457,6 +459,7 @@ export async function POST(req: NextRequest) {
 
 // ─── GET: Validate all un-enriched leads in batch ────────────────
 export async function GET(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const limit = Math.min(parseInt(searchParams.get('limit') || '50', 10), 200);

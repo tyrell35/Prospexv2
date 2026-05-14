@@ -1,8 +1,16 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  // Cron-only: validate the Vercel cron Bearer if CRON_SECRET is set.
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret) {
+    const auth = request.headers.get('authorization') || '';
+    if (auth !== `Bearer ${cronSecret}`) {
+      return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+    }
+  }
   try {
     const { data: settings } = await supabase
       .from('settings')

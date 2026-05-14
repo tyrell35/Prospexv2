@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 export async function GET() {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { data, error } = await supabase
       .from('outreach_settings')
@@ -27,6 +29,7 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
 

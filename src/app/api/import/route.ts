@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { calculateLeadScore } from '@/lib/scoring';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 function parseCSV(text: string): Record<string, string>[] {
   const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -51,6 +52,7 @@ function mapFields(row: Record<string, string>): Record<string, string | null> {
 }
 
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const formData = await request.formData();
     const file = formData.get('file') as File;

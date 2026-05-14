@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { authOr401 } from '@/lib/api-auth';
 
 // ─── AD LONGEVITY SCORING ALGORITHM ──────────────────────────
 // The longer an ad runs, the more likely it's profitable.
@@ -363,6 +364,7 @@ function analyzeTrends(profiles: AdvertiserProfile[], ads: AdResult[]): TrendIns
 // ─── ROUTE HANDLER ──────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchTerm, country = 'United Kingdom', limit = 100 } = await request.json();
 

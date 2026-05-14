@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from '@/lib/api-auth';
 
 // ═══════════════════════════════════════════════════════
 // DM CAMPAIGN MANAGER
@@ -11,6 +12,13 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { action } = body;
+
+    // webhook_reply is called externally (sender tools), not from the browser.
+    // It validates via env-secret if set; otherwise allowed (with warning).
+    if (action !== 'webhook_reply') {
+      const _auth = await authOr401();
+      if (_auth instanceof Response) return _auth;
+    }
 
     switch (action) {
       case 'get_campaigns': return getCampaigns();

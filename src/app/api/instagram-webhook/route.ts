@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { verifyWebhookSecret } from '@/lib/api-auth';
 
 // ═══════════════════════════════════════════════════════════
 // INSTAGRAM WEBHOOK — Receives DMs via Meta Graph API
@@ -38,7 +39,12 @@ export async function GET(request: NextRequest) {
 }
 
 // POST — Receive incoming messages
+// TODO: For full Meta-compliant verification, validate the x-hub-signature-256
+// HMAC header using the Meta App Secret. The shared-secret check below is a
+// minimal fallback for non-Meta callers.
 export async function POST(request: NextRequest) {
+  const reject = verifyWebhookSecret(request, 'INSTAGRAM_WEBHOOK_SECRET');
+  if (reject) return reject;
   try {
     const body = await request.json();
 

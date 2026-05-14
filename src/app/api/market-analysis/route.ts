@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 interface MarketBusiness {
   id?: string;
@@ -111,6 +112,7 @@ async function quickWebsiteAudit(website: string): Promise<{
 }
 
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { niche, location, country = 'United Kingdom', leadId } = await request.json();
 
@@ -395,6 +397,7 @@ export async function POST(request: NextRequest) {
 
 // GET — Fetch analysis history
 export async function GET() {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { data, error } = await supabase
       .from('market_analyses')
@@ -411,6 +414,7 @@ export async function GET() {
 
 // DELETE — Remove saved analysis
 export async function DELETE(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { id } = await request.json();
     if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ═══════════════════════════════════════════════════════
 // AI CONVERSATION ENGINE — The Brain
@@ -219,6 +220,7 @@ function extractQualifyingInfo(message: string, existingData: Record<string, unk
 
 // ═══ MAIN API HANDLER ═══
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await request.json();
     const { action } = body;

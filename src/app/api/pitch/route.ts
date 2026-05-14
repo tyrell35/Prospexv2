@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from '@/lib/api-auth';
 
 function generateSEOPitch(lead: Record<string, unknown>, audit: Record<string, unknown>) {
   const seoData = audit.seo_data as Record<string, unknown> | null;
@@ -96,6 +97,8 @@ function generateComprehensivePitch(lead: Record<string, unknown>, audit: Record
 }
 
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401();
+  if (_auth instanceof Response) return _auth;
   try {
     const { leadId, deepAuditId, pitchType } = await request.json();
     if (!leadId || !pitchType) return NextResponse.json({ error: 'leadId and pitchType required' }, { status: 400 });

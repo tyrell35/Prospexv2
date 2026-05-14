@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ─── GET: List variants with performance data ────────────────────
 export async function GET(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const sequenceId = searchParams.get('sequence_id');
@@ -48,6 +50,7 @@ export async function GET(req: NextRequest) {
 
 // ─── POST: Create variant or run optimization ────────────────────
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
     const { action = 'create' } = body;
@@ -217,6 +220,7 @@ Return ONLY the new message text.`;
 
 // ─── PUT: Update variant ─────────────────────────────────────────
 export async function PUT(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
     const { id, ...updates } = body;
@@ -238,6 +242,7 @@ export async function PUT(req: NextRequest) {
 
 // ─── DELETE: Remove variant ──────────────────────────────────────
 export async function DELETE(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');

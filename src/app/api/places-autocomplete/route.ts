@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { authOr401 } from '@/lib/api-auth';
 
 // Google Places Autocomplete proxy
 // Uses the Places API (New) — Autocomplete endpoint
 // Requires GOOGLE_PLACES_API_KEY env var
 
 export async function GET(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   const { searchParams } = new URL(request.url);
   const input = searchParams.get('input');
   const country = searchParams.get('country') || '';

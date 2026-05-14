@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { authOr401 } from "@/lib/api-auth";
 
 function getSupabase() {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) return null;
@@ -25,6 +26,7 @@ export interface OutreachLog {
 // ─── GET: Fetch metrics & logs ──────────────────────────────
 
 export async function GET(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   const { searchParams } = new URL(request.url);
   const action = searchParams.get('action') || 'metrics';
   const period = searchParams.get('period') || '30d';
@@ -77,6 +79,7 @@ export async function GET(request: NextRequest) {
 // ─── POST: Log an outreach activity ─────────────────────────
 
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   const supabase = getSupabase();
   const body: OutreachLog = await request.json();
 
@@ -117,6 +120,7 @@ export async function POST(request: NextRequest) {
 // ─── PATCH: Update outcome (e.g. sent → replied → booked) ──
 
 export async function PATCH(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   const supabase = getSupabase();
   const { id, outcome, revenue, notes } = await request.json();
 

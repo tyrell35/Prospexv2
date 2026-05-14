@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 export async function GET(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const id = searchParams.get('id');
@@ -79,6 +81,7 @@ export async function GET(req: NextRequest) {
 
 // POST: Send a manual message or update conversation
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
     const { action = 'send_message' } = body;

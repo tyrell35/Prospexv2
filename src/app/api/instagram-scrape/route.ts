@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ═══════════════════════════════════════════════════════
 // INSTAGRAM SCRAPER — B2B Business Profile Discovery
@@ -456,6 +457,7 @@ function calculateCompleteness(lead: InstagramLead): number {
 
 // ═══ MAIN HANDLER ═══
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { niche, location, country = 'United Kingdom', method = 'google', maxResults = 20, saveToDb = false } = await request.json();
 

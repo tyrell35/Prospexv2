@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ─── TECH STACK DETECTION ────────────────────────────────────────
 interface TechItem { name: string; category: string; confidence: 'high' | 'medium' | 'low' }
@@ -250,6 +251,7 @@ async function scrapeWebsite(url: string): Promise<string | null> {
 
 // ─── MAIN: WATERFALL ENRICHMENT ──────────────────────────────────
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
     const { lead_id, lead_ids, skip_crawl = false } = body;
@@ -396,6 +398,7 @@ export async function POST(req: NextRequest) {
 
 // ─── GET: Batch enrich un-enriched leads ─────────────────────────
 export async function GET(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const limit = Math.min(parseInt(searchParams.get('limit') || '25', 10), 100);

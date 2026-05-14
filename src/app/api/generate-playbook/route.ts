@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 function getLocale(country: string | null) {
   const c = (country || '').toUpperCase();
@@ -160,6 +161,7 @@ function extractRevenueLeak(content: string): string {
 }
 
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await request.json();
     const { lead_id, bulk } = body;

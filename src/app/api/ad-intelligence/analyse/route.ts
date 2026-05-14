@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ─── AI ANALYSIS PROMPT ──────────────────────────────────────────
 function buildAnalysisPrompt(businessName: string, ads: { ad_copy: string; headline: string; days_running: number; platforms: string[]; media_type: string }[]): string {
@@ -64,6 +65,7 @@ Be harsh but fair. Most small business ads score 30-60. Only truly exceptional a
 
 // ─── MAIN HANDLER ────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ─── HUMAN-LIKE DELAY ────────────────────────────────────────────
 function randomDelay(min: number, max: number): number {
@@ -220,6 +221,7 @@ async function selectVariant(sequenceId: string, stepNumber: number): Promise<an
 
 // ─── POST: Process outreach queue ────────────────────────────────
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
     const { action = 'process_queue', batch_size = 10 } = body;
@@ -651,6 +653,7 @@ export async function POST(req: NextRequest) {
 
 // ─── GET: Queue status + performance stats ───────────────────────
 export async function GET(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const view = searchParams.get('view') || 'status';

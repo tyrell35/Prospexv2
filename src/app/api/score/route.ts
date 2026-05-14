@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { calculateLeadScore } from '@/lib/scoring';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { leadIds } = await request.json();
     if (!leadIds || !Array.isArray(leadIds) || leadIds.length === 0) {

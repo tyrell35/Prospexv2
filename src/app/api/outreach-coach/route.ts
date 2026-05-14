@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { authOr401 } from '@/lib/api-auth';
 
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const apiKey = process.env.ANTHROPIC_API_KEY;
 

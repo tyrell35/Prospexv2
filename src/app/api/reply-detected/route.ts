@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { verifyWebhookSecret, authOr401 } from '@/lib/api-auth';
 
 // ─── INTENT CLASSIFICATION ──────────────────────────────────────
 const INTENT_PROMPT = `You are an expert at classifying sales conversation replies for a UK marketing agency that serves med spas, aesthetic clinics, dental practices, and beauty businesses.
@@ -175,6 +176,8 @@ async function fireAutomationRules(
 
 // ─── MAIN WEBHOOK HANDLER (POST) ────────────────────────────────
 export async function POST(req: NextRequest) {
+  const reject = verifyWebhookSecret(req, 'REPLY_WEBHOOK_SECRET');
+  if (reject) return reject;
   try {
     const body = await req.json();
     const {
@@ -430,6 +433,8 @@ export async function POST(req: NextRequest) {
 
 // ─── GET: Retrieve intent classification stats ───────────────────
 export async function GET(req: NextRequest) {
+  const _auth = await authOr401();
+  if (_auth instanceof Response) return _auth;
   try {
     const { data: conversations } = await supabase
       .from('conversations')

@@ -1,14 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
+import { authOr401, adminOr403 } from '@/lib/api-auth';
 
 // Both admin operations (inviting users via auth.admin) and regular table reads
 // run through the service-role client now that RLS requires authenticated.
 const supabase = supabaseAdmin;
 
+const ADMIN_ONLY_ACTIONS = new Set(['invite_member', 'update_role', 'remove_member', 'resend_invite']);
+
 export async function POST(request: NextRequest) {
+  // Every team action requires a logged-in user.
+  const auth = await authOr401();
+  if (auth instanceof NextResponse) return auth;
+
   try {
     const body = await request.json();
     const { action } = body;
+
+    // Destructive / admin actions require the caller to be an owner or admin.
+    if (ADMIN_ONLY_ACTIONS.has(action)) {
+      const adminCheck = await adminOr403(auth);
+      if (adminCheck instanceof NextResponse) return adminCheck;
+    }
 
     switch (action) {
       case 'list_members':

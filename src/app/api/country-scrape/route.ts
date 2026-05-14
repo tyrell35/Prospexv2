@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
+import { authOr401 } from "@/lib/api-auth";
 
 // ─── COUNTRY CODES FOR OUTSCRAPER ────────────────────────────────
 const COUNTRY_REGIONS: Record<string, string> = {
@@ -101,6 +102,7 @@ async function deduplicateAndSave(leads: any[], niche: string): Promise<{ saved:
 
 // ─── MAIN: COUNTRY / REGION SCALE SCRAPE ─────────────────────────
 export async function POST(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const body = await req.json();
     const {
@@ -200,6 +202,7 @@ export async function POST(req: NextRequest) {
 
 // ─── GET: List available regions ─────────────────────────────────
 export async function GET(req: NextRequest) {
+  const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
   try {
     const { searchParams } = new URL(req.url);
     const country = searchParams.get('country') || 'United Kingdom';
