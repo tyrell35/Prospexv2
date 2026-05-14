@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
-import { X, Download, Loader2, Check, FileText, Target, Users, AlertCircle } from 'lucide-react';
+import { X, Download, Loader2, Check, FileText, Target, Users, AlertCircle, Building2, Mail } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 
@@ -10,7 +10,7 @@ interface Props {
   onClose: () => void;
 }
 
-type Format = 'standard' | 'meta' | 'skool';
+type Format = 'standard' | 'meta' | 'linkedin' | 'klaviyo' | 'mailchimp' | 'activecampaign' | 'skool';
 
 interface Lead {
   id: string;
@@ -161,6 +161,96 @@ function buildSkoolCsv(leads: Lead[]): string {
   return rowsToCsv(headers, rows);
 }
 
+// LinkedIn Matched Audience (contact-based). Campaign Manager hashes on upload.
+// Headers per LinkedIn documented schema.
+function buildLinkedInCsv(leads: Lead[]): string {
+  const headers = ['email', 'firstname', 'lastname', 'companyname', 'country'];
+  const rows: Array<Array<string>> = [];
+  const seen = new Set<string>();
+  for (const l of leads) {
+    const e = (l.email || '').toLowerCase().trim();
+    if (!e || seen.has(e)) continue;
+    seen.add(e);
+    const { fn, ln } = splitName(l.business_name);
+    rows.push([e, fn, ln, l.business_name || '', isoCountry(l.country)]);
+  }
+  return rowsToCsv(headers, rows);
+}
+
+// Klaviyo list import. Phone in E.164 (we already store this as phone_formatted).
+function buildKlaviyoCsv(leads: Lead[]): string {
+  const headers = ['Email', 'First Name', 'Last Name', 'Phone Number', 'Organization', 'City', 'Country', 'Source'];
+  const rows: Array<Array<string>> = [];
+  const seen = new Set<string>();
+  for (const l of leads) {
+    const e = (l.email || '').toLowerCase().trim();
+    if (!e || seen.has(e)) continue;
+    seen.add(e);
+    const { fn, ln } = splitName(l.business_name);
+    rows.push([
+      e,
+      fn,
+      ln,
+      l.phone_formatted || l.phone || '',
+      l.business_name || '',
+      l.city || '',
+      l.country || '',
+      l.source || 'prospex',
+    ]);
+  }
+  return rowsToCsv(headers, rows);
+}
+
+// Mailchimp Audience import. Tags column = comma-separated string Mailchimp parses.
+function buildMailchimpCsv(leads: Lead[]): string {
+  const headers = ['Email Address', 'First Name', 'Last Name', 'Phone', 'Company', 'City', 'Country', 'Tags'];
+  const rows: Array<Array<string>> = [];
+  const seen = new Set<string>();
+  for (const l of leads) {
+    const e = (l.email || '').toLowerCase().trim();
+    if (!e || seen.has(e)) continue;
+    seen.add(e);
+    const { fn, ln } = splitName(l.business_name);
+    const tags = ['prospex', l.source, l.lead_priority].filter(Boolean).join(',');
+    rows.push([
+      e,
+      fn,
+      ln,
+      l.phone_formatted || l.phone || '',
+      l.business_name || '',
+      l.city || '',
+      l.country || '',
+      tags,
+    ]);
+  }
+  return rowsToCsv(headers, rows);
+}
+
+// ActiveCampaign Contact import. Tags column space/comma separated.
+function buildActiveCampaignCsv(leads: Lead[]): string {
+  const headers = ['email', 'first_name', 'last_name', 'phone', 'company', 'city', 'country', 'tags'];
+  const rows: Array<Array<string>> = [];
+  const seen = new Set<string>();
+  for (const l of leads) {
+    const e = (l.email || '').toLowerCase().trim();
+    if (!e || seen.has(e)) continue;
+    seen.add(e);
+    const { fn, ln } = splitName(l.business_name);
+    const tags = ['prospex', l.source, l.lead_priority].filter(Boolean).join(',');
+    rows.push([
+      e,
+      fn,
+      ln,
+      l.phone_formatted || l.phone || '',
+      l.business_name || '',
+      l.city || '',
+      l.country || '',
+      tags,
+    ]);
+  }
+  return rowsToCsv(headers, rows);
+}
+
 // ═══════════════════════════════════════════════════════
 // COMPONENT
 // ═══════════════════════════════════════════════════════
@@ -199,6 +289,17 @@ export default function ExportLeadsModal({ isOpen, onClose }: Props) {
     return () => { cancelled = true; };
   }, [isOpen]);
 
+  // Per-format filter: 'none' | 'email_or_phone' | 'email'
+  const formatFilter: Record<Format, 'none' | 'email_or_phone' | 'email'> = {
+    standard: 'none',
+    meta: 'email_or_phone',
+    linkedin: 'email',
+    klaviyo: 'email',
+    mailchimp: 'email',
+    activecampaign: 'email',
+    skool: 'email',
+  };
+
   // Live match count whenever country/format changes
   useEffect(() => {
     if (!isOpen) return;
@@ -207,9 +308,9 @@ export default function ExportLeadsModal({ isOpen, onClose }: Props) {
     (async () => {
       let q = supabase.from('leads').select('id', { count: 'exact', head: true });
       if (country) q = q.eq('country', country);
-      if (format === 'skool') q = q.not('email', 'is', null);
-      if (format === 'meta') {
-        // Has at least email or phone
+      const filter = formatFilter[format];
+      if (filter === 'email') q = q.not('email', 'is', null);
+      if (filter === 'email_or_phone') {
         q = q.or('email.not.is.null,phone.not.is.null,phone_formatted.not.is.null');
       }
       const { count, error: err } = await q;
@@ -220,12 +321,20 @@ export default function ExportLeadsModal({ isOpen, onClose }: Props) {
       }
     })();
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, country, format]);
 
   const formatMeta = useMemo(() => {
-    if (format === 'meta') return { name: 'Meta Custom Audience', help: 'Upload to Meta Ads Manager → Audiences → Create → Custom Audience → Customer List. Meta hashes the data on upload.' };
-    if (format === 'skool') return { name: 'Skool Invite List', help: 'Upload to your Skool community → Members → Invite → Bulk Upload. Single Email column, deduplicated, lowercased.' };
-    return { name: 'Standard CSV', help: 'All useful fields for spreadsheets, your CRM, or another tool. Includes business name, contact, scores, and metadata.' };
+    const map: Record<Format, { name: string; help: string }> = {
+      standard: { name: 'Standard CSV', help: 'All useful fields for spreadsheets, your CRM, or another tool. Includes business name, contact, scores, and metadata.' },
+      meta: { name: 'Meta Custom Audience', help: 'Upload to Meta Ads Manager → Audiences → Create → Custom Audience → Customer List. Meta hashes data on upload.' },
+      linkedin: { name: 'LinkedIn Matched Audience', help: 'Upload to LinkedIn Campaign Manager → Audiences → Create → Upload a list. Campaign Manager hashes data on upload.' },
+      klaviyo: { name: 'Klaviyo List', help: 'Upload to Klaviyo → Lists & Segments → your list → Manage members → Import contacts. Includes Source for segmentation.' },
+      mailchimp: { name: 'Mailchimp Audience', help: 'Upload to Mailchimp → Audience → All contacts → Add contacts → Import contacts. Tags column auto-populated for segmentation.' },
+      activecampaign: { name: 'ActiveCampaign Contacts', help: 'Upload to ActiveCampaign → Contacts → Import. Tags column auto-populated for segmentation.' },
+      skool: { name: 'Skool Invite List', help: 'Upload to your Skool community → Members → Invite → Bulk Upload. Single Email column, deduplicated, lowercased.' },
+    };
+    return map[format];
   }, [format]);
 
   const handleExport = async () => {
@@ -242,8 +351,9 @@ export default function ExportLeadsModal({ isOpen, onClose }: Props) {
       while (true) {
         let q = supabase.from('leads').select(SELECT).order('created_at', { ascending: false }).range(from, from + PAGE - 1);
         if (country) q = q.eq('country', country);
-        if (format === 'skool') q = q.not('email', 'is', null);
-        if (format === 'meta') {
+        const filter = formatFilter[format];
+        if (filter === 'email') q = q.not('email', 'is', null);
+        if (filter === 'email_or_phone') {
           q = q.or('email.not.is.null,phone.not.is.null,phone_formatted.not.is.null');
         }
         const { data, error: err } = await q;
@@ -261,11 +371,17 @@ export default function ExportLeadsModal({ isOpen, onClose }: Props) {
         return;
       }
 
-      let csv: string;
-      let suffix: string;
-      if (format === 'meta') { csv = buildMetaCsv(all); suffix = 'meta-custom-audience'; }
-      else if (format === 'skool') { csv = buildSkoolCsv(all); suffix = 'skool-invites'; }
-      else { csv = buildStandardCsv(all); suffix = 'leads'; }
+      const builders: Record<Format, { build: (l: Lead[]) => string; suffix: string }> = {
+        standard: { build: buildStandardCsv, suffix: 'leads' },
+        meta: { build: buildMetaCsv, suffix: 'meta-custom-audience' },
+        linkedin: { build: buildLinkedInCsv, suffix: 'linkedin-matched-audience' },
+        klaviyo: { build: buildKlaviyoCsv, suffix: 'klaviyo' },
+        mailchimp: { build: buildMailchimpCsv, suffix: 'mailchimp' },
+        activecampaign: { build: buildActiveCampaignCsv, suffix: 'activecampaign' },
+        skool: { build: buildSkoolCsv, suffix: 'skool-invites' },
+      };
+      const { build, suffix } = builders[format];
+      const csv = build(all);
 
       const datestamp = new Date().toISOString().slice(0, 10);
       const countrySlug = country ? `-${country.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : '-all';
@@ -280,10 +396,37 @@ export default function ExportLeadsModal({ isOpen, onClose }: Props) {
 
   if (!isOpen) return null;
 
-  const formats: Array<{ key: Format; label: string; help: string; icon: typeof FileText }> = [
-    { key: 'standard', label: 'Standard CSV', help: 'All fields — for spreadsheets / CRM', icon: FileText },
-    { key: 'meta', label: 'Meta Custom Audience', help: 'For Meta Ads Manager customer-list audiences', icon: Target },
-    { key: 'skool', label: 'Skool Invite List', help: 'Single Email column for Skool bulk invites', icon: Users },
+  const formatGroups: Array<{
+    label: string;
+    items: Array<{ key: Format; label: string; help: string; icon: typeof FileText }>;
+  }> = [
+    {
+      label: 'General',
+      items: [
+        { key: 'standard', label: 'Standard CSV', help: 'All fields — for spreadsheets / CRM', icon: FileText },
+      ],
+    },
+    {
+      label: 'Ad Audiences',
+      items: [
+        { key: 'meta', label: 'Meta Custom Audience', help: 'Meta Ads Manager customer-list audiences', icon: Target },
+        { key: 'linkedin', label: 'LinkedIn Matched Audience', help: 'LinkedIn Campaign Manager contact-list audiences', icon: Building2 },
+      ],
+    },
+    {
+      label: 'Email Marketing',
+      items: [
+        { key: 'klaviyo', label: 'Klaviyo List', help: 'Klaviyo list/segment import', icon: Mail },
+        { key: 'mailchimp', label: 'Mailchimp Audience', help: 'Mailchimp audience import (with tags)', icon: Mail },
+        { key: 'activecampaign', label: 'ActiveCampaign', help: 'ActiveCampaign contact import (with tags)', icon: Mail },
+      ],
+    },
+    {
+      label: 'Community',
+      items: [
+        { key: 'skool', label: 'Skool Invite List', help: 'Single Email column for Skool bulk invites', icon: Users },
+      ],
+    },
   ];
 
   return (
@@ -311,25 +454,32 @@ export default function ExportLeadsModal({ isOpen, onClose }: Props) {
           {/* Format */}
           <div>
             <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-2">Export Format</label>
-            <div className="space-y-2">
-              {formats.map(f => {
-                const Icon = f.icon;
-                const active = format === f.key;
-                return (
-                  <button key={f.key} onClick={() => setFormat(f.key)}
-                    className={cn('w-full text-left p-3 rounded-lg border transition-colors flex items-start gap-3',
-                      active
-                        ? 'bg-prospex-cyan/10 border-prospex-cyan/40'
-                        : 'bg-prospex-bg border-prospex-border hover:border-prospex-cyan/30')}>
-                    <Icon className={cn('w-4 h-4 mt-0.5 shrink-0', active ? 'text-prospex-cyan' : 'text-prospex-dim')} />
-                    <div className="min-w-0">
-                      <p className={cn('text-xs font-medium', active ? 'text-prospex-cyan' : 'text-prospex-text')}>{f.label}</p>
-                      <p className="text-[10px] text-prospex-dim mt-0.5">{f.help}</p>
-                    </div>
-                    {active && <Check className="w-3.5 h-3.5 text-prospex-cyan ml-auto mt-0.5 shrink-0" />}
-                  </button>
-                );
-              })}
+            <div className="space-y-3">
+              {formatGroups.map(group => (
+                <div key={group.label}>
+                  <p className="text-[9px] font-mono text-prospex-dim uppercase tracking-wider mb-1.5">{group.label}</p>
+                  <div className="space-y-1.5">
+                    {group.items.map(f => {
+                      const Icon = f.icon;
+                      const active = format === f.key;
+                      return (
+                        <button key={f.key} onClick={() => setFormat(f.key)}
+                          className={cn('w-full text-left p-3 rounded-lg border transition-colors flex items-start gap-3',
+                            active
+                              ? 'bg-prospex-cyan/10 border-prospex-cyan/40'
+                              : 'bg-prospex-bg border-prospex-border hover:border-prospex-cyan/30')}>
+                          <Icon className={cn('w-4 h-4 mt-0.5 shrink-0', active ? 'text-prospex-cyan' : 'text-prospex-dim')} />
+                          <div className="min-w-0">
+                            <p className={cn('text-xs font-medium', active ? 'text-prospex-cyan' : 'text-prospex-text')}>{f.label}</p>
+                            <p className="text-[10px] text-prospex-dim mt-0.5">{f.help}</p>
+                          </div>
+                          {active && <Check className="w-3.5 h-3.5 text-prospex-cyan ml-auto mt-0.5 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -349,7 +499,12 @@ export default function ExportLeadsModal({ isOpen, onClose }: Props) {
                 ⚠️ Only leads with an email or phone are included. Country codes are mapped to ISO-2 (GB, US, CA, AU, IE) where possible.
               </p>
             )}
-            {format === 'skool' && (
+            {format === 'linkedin' && (
+              <p className="text-[10px] text-amber-400 mt-1">
+                ⚠️ Only leads with an email are included; duplicates removed. Country codes mapped to ISO-2.
+              </p>
+            )}
+            {(format === 'klaviyo' || format === 'mailchimp' || format === 'activecampaign' || format === 'skool') && (
               <p className="text-[10px] text-amber-400 mt-1">
                 ⚠️ Only leads with an email are included; duplicates are removed.
               </p>
