@@ -19,6 +19,10 @@
     {
       "path": "/api/follow-ups?cron=schedule_reactivations",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/hunt/run?cron=nightly&limit=25",
+      "schedule": "0 3 * * *"
     }
   ]
 }
