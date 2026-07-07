@@ -98,12 +98,13 @@ export async function POST(request: NextRequest) {
 
   // Fire-and-forget: seed the ad-library queue asynchronously.
   const origin = new URL(request.url).origin;
-  const bearer = process.env.CRON_SECRET ? { authorization: `Bearer ${process.env.CRON_SECRET}` } : {};
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (process.env.CRON_SECRET) headers.authorization = `Bearer ${process.env.CRON_SECRET}`;
   (async () => {
     try {
       const seedRes = await fetch(`${origin}/api/hunt/seed-adlibrary`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...bearer },
+        headers,
         body: JSON.stringify({ mode: 'search', keyword, country, limit }),
       });
       const data = await seedRes.json().catch(() => ({}));

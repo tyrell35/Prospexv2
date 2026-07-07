@@ -178,22 +178,41 @@ const AGENCY_VOCAB = [
   'lead generation', 'digital agency', 'ad agency', 'marketing partner',
 ];
 
-// Hard-blocked noise categories
+// Hard-blocked noise categories. Currency mismatch was removed from this list —
+// it's now a soft flag (see returned currency_mismatch) so we don't miss real
+// clinics whose Meta account happens to bill in another currency.
 const JUNK_VOCAB = [
-  'supplements', 'vitamins', 'skincare products', 'shop now', 'nutraceutical',
-  'training academy', 'course', 'certification', 'affiliate', 'ebook', 'ecourse',
-  'publisher', 'magazine', 'news', 'blog',
+  // Products / DTC
+  'supplements', 'vitamins', 'skincare products', 'shop now', 'buy now',
+  'nutraceutical', 'delivery', 'free shipping', 'add to cart',
+  'at home', 'home use', 'home device', 'home kit', 'device kit',
+  'wearable', 'led mask', 'red light mask', 'night lenses', 'contact lenses',
+  // Training / courses / affiliates
+  'training academy', 'course', 'certification', 'affiliate', 'ebook',
+  'ecourse', 'masterclass', 'coaching program',
+  // Publishers / media
+  'magazine', 'gazette', 'newspaper', 'news outlet', 'blog post', 'life magazine',
 ];
 
 export type SeedClassification = 'clinic' | 'agency' | 'junk' | 'ambiguous';
 
+export interface SeedClassificationResult {
+  classification: SeedClassification;
+  currency_mismatch: boolean;
+}
+
 /**
  * Classify a Meta Ad Library search result page.
  * Returns:
- *  - 'clinic' → likely a real clinic prospect
- *  - 'agency' → other agency chasing the same market (competitor_watch)
- *  - 'junk'   → product / publisher / course — drop
- *  - 'ambiguous' → send to review queue for human decision
+ *  - classification:
+ *      'clinic'    → likely a real clinic prospect
+ *      'agency'    → other agency chasing the same market (competitor_watch)
+ *      'junk'      → product / publisher / course — drop
+ *      'ambiguous' → send to review queue for human decision
+ *  - currency_mismatch: true when the ad ran in a different currency than the
+ *    hunt country expects. Meta's currency field is unreliable for country
+ *    decisions (a US-billed ad account can run UK-targeted ads), so this is a
+ *    soft warning flag only — the row is still ingested for human review.
  */
 export function classifySeedResult(input: {
   page_name?: string | null;
@@ -201,27 +220,31 @@ export function classifySeedResult(input: {
   ad_bodies?: string[];
   currency?: string | null;
   expected_currency?: string | null; // GBP for GB, USD for US
-}): SeedClassification {
+}): SeedClassificationResult {
   const parts = [
     input.page_name || '',
     ...(input.ad_titles || []),
     ...(input.ad_bodies || []),
   ].join(' ').toLowerCase();
 
-  // Currency mismatch is a hard filter for country-scoped hunts (Section 4 note)
-  if (input.expected_currency && input.currency && input.currency !== input.expected_currency) {
-    return 'junk';
-  }
+  const currency_mismatch = !!(
+    input.expected_currency && input.currency && input.currency !== input.expected_currency
+  );
 
-  // Junk categories drop first
-  if (JUNK_VOCAB.some(w => parts.includes(w))) return 'junk';
+  // Junk categories drop first (products / publishers / courses)
+  if (JUNK_VOCAB.some(w => parts.includes(w))) {
+    return { classification: 'junk', currency_mismatch };
+  }
 
   const hasClinic = CLINIC_VOCAB.some(w => parts.includes(w));
   const hasAgency = AGENCY_VOCAB.some(w => parts.includes(w));
 
-  if (hasAgency && !hasClinic) return 'agency';
-  if (hasClinic && !hasAgency) return 'clinic';
-  if (hasClinic && hasAgency) return 'ambiguous'; // e.g. "clinic marketing" — needs eyeballs
-  return 'ambiguous';
+  let classification: SeedClassification;
+  if (hasAgency && !hasClinic) classification = 'agency';
+  else if (hasClinic && !hasAgency) classification = 'clinic';
+  else if (hasClinic && hasAgency) classification = 'ambiguous'; // "clinic marketing"
+  else classification = 'ambiguous';
+
+  return { classification, currency_mismatch };
 }
 

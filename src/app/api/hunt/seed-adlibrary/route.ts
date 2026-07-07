@@ -137,21 +137,23 @@ async function ingestRows(ads: ImportRow[], ctx: IngestCtx) {
     ad_copy: string | null;
     currency: string | null;
     status: 'pending' | 'competitor';
+    currency_mismatch: boolean;
   }> = [];
 
-  const stats = { total: byPage.size, clinic: 0, agency: 0, junk: 0, ambiguous: 0 };
+  const stats = { total: byPage.size, clinic: 0, agency: 0, junk: 0, ambiguous: 0, currency_flagged: 0 };
 
   for (const [pageId, r] of byPage) {
-    const cls = classifySeedResult({
+    const { classification, currency_mismatch } = classifySeedResult({
       page_name: r.page_name,
       ad_titles: r.ad_titles || [r.ad_copy || ''].filter(Boolean),
       ad_bodies: r.ad_bodies || [r.ad_copy || ''].filter(Boolean),
       currency: r.currency,
       expected_currency: ctx.expected_currency,
     });
-    stats[cls]++;
+    stats[classification]++;
+    if (currency_mismatch) stats.currency_flagged++;
 
-    if (cls === 'junk') continue;
+    if (classification === 'junk') continue;
 
     rows.push({
       fb_page_id: pageId,
@@ -161,7 +163,8 @@ async function ingestRows(ads: ImportRow[], ctx: IngestCtx) {
       ad_snapshot_url: r.ad_snapshot_url || null,
       ad_copy: r.ad_copy || null,
       currency: r.currency || null,
-      status: cls === 'agency' ? 'competitor' : 'pending',
+      status: classification === 'agency' ? 'competitor' : 'pending',
+      currency_mismatch,
     });
   }
 

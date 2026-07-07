@@ -374,6 +374,7 @@ interface QueueRowUI {
   ad_snapshot_url: string | null;
   ad_copy: string | null;
   currency: string | null;
+  currency_mismatch: boolean | null;
   status: string;
   found_at: string;
 }
@@ -562,7 +563,19 @@ function ReviewQueuePanel({ onPromoted }: { onPromoted: () => void }) {
                           setSelected(next);
                         }} />
                       </td>
-                      <td className="px-2 py-2 text-prospex-text">{r.page_name || `Page ${r.fb_page_id}`}</td>
+                      <td className="px-2 py-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-prospex-text">{r.page_name || `Page ${r.fb_page_id}`}</span>
+                          {r.currency_mismatch && (
+                            <span
+                              className="badge text-[9px] bg-amber-500/20 text-amber-400 border-amber-500/40"
+                              title={`Meta recorded currency ${r.currency || '?'} — check the ad for country targeting before promoting`}
+                            >
+                              ⚠️ {r.currency || 'currency'}
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-2 py-2 text-prospex-muted font-mono">{r.search_term || '—'}</td>
                       <td className="px-2 py-2 text-prospex-muted">{r.country || '—'}</td>
                       <td className="px-2 py-2 max-w-[280px] truncate" title={r.ad_copy || ''}>
