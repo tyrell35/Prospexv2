@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   Target, Loader2, RefreshCw, Play, Filter, Upload, Flame, Sun, Snowflake, Ban,
   ExternalLink, Zap, Radio, MessageSquare, Building2, Sparkles, AlertTriangle,
+  Radar, Check, X, ChevronDown, ChevronRight, ArrowRight, Search as SearchIcon,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
@@ -202,6 +203,9 @@ export default function HuntPage() {
         </div>
       </div>
 
+      {/* Ad Library Review Queue */}
+      <ReviewQueuePanel onPromoted={load} />
+
       {/* Band histogram */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {(['hot', 'warm', 'cold', 'disqualified'] as Band[]).map(b => {
@@ -353,6 +357,230 @@ function HuntRowCard({ row, onPushGhl, pushing }: { row: HuntRow; onPushGhl: () 
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// REVIEW QUEUE PANEL — Ad Library seed candidates
+// ═══════════════════════════════════════════════════════
+
+interface QueueRowUI {
+  id: number;
+  fb_page_id: string;
+  page_name: string | null;
+  country: string | null;
+  search_term: string | null;
+  ad_snapshot_url: string | null;
+  ad_copy: string | null;
+  currency: string | null;
+  status: string;
+  found_at: string;
+}
+
+function ReviewQueuePanel({ onPromoted }: { onPromoted: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<QueueRowUI[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [showSeed, setShowSeed] = useState(false);
+  const [seedKeyword, setSeedKeyword] = useState('');
+  const [seedCountry, setSeedCountry] = useState('GB');
+  const [seedLimit, setSeedLimit] = useState(50);
+  const [seeding, setSeeding] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [statusTab, setStatusTab] = useState<'pending' | 'approved' | 'rejected' | 'competitor'>('pending');
+
+  const load = async () => {
+    setLoading(true);
+    const res = await fetch(`/api/hunt/queue?status=${statusTab}&limit=200`);
+    const data = await res.json();
+    setRows(data.rows || []);
+    setSelected(new Set());
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (open) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, statusTab]);
+
+  const bulkAction = async (action: 'approve' | 'reject' | 'mark_competitor' | 'promote_to_leads') => {
+    if (selected.size === 0) return;
+    const res = await fetch('/api/hunt/queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, queue_ids: Array.from(selected) }),
+    });
+    const data = await res.json();
+    if (data.success) {
+      if (action === 'promote_to_leads') { setMsg(`Promoted ${data.promoted} to leads.`); onPromoted(); }
+      load();
+    } else {
+      setMsg(`Error: ${data.error || 'action failed'}`);
+    }
+    setTimeout(() => setMsg(null), 3000);
+  };
+
+  const seedNow = async () => {
+    if (!seedKeyword.trim()) return;
+    setSeeding(true);
+    setMsg(null);
+    try {
+      const res = await fetch('/api/hunt/seed-adlibrary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'search', keyword: seedKeyword, country: seedCountry, limit: seedLimit }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setMsg(`Seed failed: ${data.error || 'unknown'}`);
+      } else {
+        setMsg(`Seed OK · ingested ${data.ingested} · junk ${data.filtered_junk} · dupes ${data.skipped_duplicates}`);
+        setStatusTab('pending');
+        load();
+      }
+    } finally { setSeeding(false); }
+  };
+
+  const toggleAll = () => {
+    if (selected.size === rows.length) setSelected(new Set());
+    else setSelected(new Set(rows.map(r => r.id)));
+  };
+
+  return (
+    <div className="card">
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center justify-between p-4 hover:bg-prospex-bg/30 transition-colors">
+        <div className="flex items-center gap-3">
+          <Radar className="w-4 h-4 text-prospex-cyan" />
+          <div className="text-left">
+            <h3 className="text-sm font-mono font-bold text-prospex-text">Ad Library Review Queue</h3>
+            <p className="text-[10px] text-prospex-dim">Keyword-hunt candidates from Meta Ads Library — approve to promote into leads</p>
+          </div>
+        </div>
+        {open ? <ChevronDown className="w-4 h-4 text-prospex-dim" /> : <ChevronRight className="w-4 h-4 text-prospex-dim" />}
+      </button>
+
+      {open && (
+        <div className="border-t border-prospex-border p-4 space-y-3">
+          {/* Seed controls */}
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-1">
+              {(['pending', 'approved', 'rejected', 'competitor'] as const).map(s => (
+                <button key={s} onClick={() => setStatusTab(s)}
+                  className={cn('text-[10px] px-2 py-1 rounded font-mono',
+                    statusTab === s ? 'bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/30' : 'bg-prospex-bg text-prospex-dim hover:text-prospex-text')}>
+                  {s}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setShowSeed(!showSeed)} className="btn-primary text-xs">
+              <SearchIcon className="w-3.5 h-3.5" /> Seed via Keyword
+            </button>
+          </div>
+
+          {showSeed && (
+            <div className="p-3 bg-prospex-bg border border-prospex-cyan/30 rounded-lg space-y-2">
+              <div className="flex flex-wrap gap-2 items-end">
+                <div className="flex-1 min-w-[180px]">
+                  <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Keyword</label>
+                  <input value={seedKeyword} onChange={e => setSeedKeyword(e.target.value)} placeholder="morpheus8, endolift, hifu…" className="input w-full" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Country</label>
+                  <select value={seedCountry} onChange={e => setSeedCountry(e.target.value)} className="input">
+                    <option value="GB">GB</option><option value="US">US</option><option value="CA">CA</option><option value="AU">AU</option><option value="IE">IE</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-prospex-dim uppercase block mb-1">Limit</label>
+                  <input type="number" min={5} max={200} value={seedLimit} onChange={e => setSeedLimit(parseInt(e.target.value) || 50)} className="input w-20" />
+                </div>
+                <button onClick={seedNow} disabled={seeding || !seedKeyword.trim()} className="btn-primary text-xs disabled:opacity-50">
+                  {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} Search
+                </button>
+              </div>
+              <p className="text-[10px] text-prospex-dim">Requires <code className="text-prospex-text">META_ADS_TOKEN</code>. For MCP-based seeding push into <code className="text-prospex-text">POST /api/hunt/seed-adlibrary</code> with <code className="text-prospex-text">mode=&quot;import&quot;</code>.</p>
+            </div>
+          )}
+
+          {msg && <p className="text-xs text-prospex-cyan">{msg}</p>}
+
+          {/* Bulk action bar */}
+          {selected.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2 p-2 bg-prospex-cyan/5 border border-prospex-cyan/30 rounded-lg">
+              <span className="text-xs text-prospex-cyan font-mono">{selected.size} selected</span>
+              <div className="w-px h-4 bg-prospex-border" />
+              {statusTab === 'pending' && (
+                <>
+                  <button onClick={() => bulkAction('approve')} className="btn text-[10px] bg-prospex-green/20 text-prospex-green border border-prospex-green/40 hover:bg-prospex-green/30">
+                    <Check className="w-3 h-3" /> Approve
+                  </button>
+                  <button onClick={() => bulkAction('mark_competitor')} className="btn text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/40 hover:bg-amber-500/30">
+                    <Radio className="w-3 h-3" /> Mark Competitor
+                  </button>
+                  <button onClick={() => bulkAction('reject')} className="btn text-[10px] bg-prospex-red/20 text-prospex-red border border-prospex-red/40 hover:bg-prospex-red/30">
+                    <X className="w-3 h-3" /> Reject
+                  </button>
+                </>
+              )}
+              {statusTab === 'approved' && (
+                <button onClick={() => bulkAction('promote_to_leads')} className="btn text-[10px] bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/40 hover:bg-prospex-cyan/30">
+                  <ArrowRight className="w-3 h-3" /> Promote to Leads
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Table */}
+          {loading ? (
+            <div className="py-6 text-center"><Loader2 className="w-4 h-4 animate-spin text-prospex-cyan mx-auto" /></div>
+          ) : rows.length === 0 ? (
+            <p className="text-xs text-prospex-dim text-center py-4">
+              No {statusTab} rows. {statusTab === 'pending' && 'Seed a keyword above to populate.'}
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs min-w-[720px]">
+                <thead>
+                  <tr className="table-header">
+                    <th className="w-8 px-2 py-2"><input type="checkbox" checked={rows.length > 0 && selected.size === rows.length} onChange={toggleAll} /></th>
+                    <th className="text-left px-2 py-2 font-mono text-[10px] text-prospex-dim uppercase">Page</th>
+                    <th className="text-left px-2 py-2 font-mono text-[10px] text-prospex-dim uppercase">Term</th>
+                    <th className="text-left px-2 py-2 font-mono text-[10px] text-prospex-dim uppercase">Country</th>
+                    <th className="text-left px-2 py-2 font-mono text-[10px] text-prospex-dim uppercase">Ad</th>
+                    <th className="text-left px-2 py-2 font-mono text-[10px] text-prospex-dim uppercase">Found</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(r => (
+                    <tr key={r.id} className="table-row">
+                      <td className="px-2 py-2">
+                        <input type="checkbox" checked={selected.has(r.id)} onChange={() => {
+                          const next = new Set(selected);
+                          next.has(r.id) ? next.delete(r.id) : next.add(r.id);
+                          setSelected(next);
+                        }} />
+                      </td>
+                      <td className="px-2 py-2 text-prospex-text">{r.page_name || `Page ${r.fb_page_id}`}</td>
+                      <td className="px-2 py-2 text-prospex-muted font-mono">{r.search_term || '—'}</td>
+                      <td className="px-2 py-2 text-prospex-muted">{r.country || '—'}</td>
+                      <td className="px-2 py-2 max-w-[280px] truncate" title={r.ad_copy || ''}>
+                        {r.ad_snapshot_url ? (
+                          <a href={r.ad_snapshot_url} target="_blank" rel="noopener noreferrer" className="text-prospex-cyan hover:underline flex items-center gap-1">
+                            {r.ad_copy ? r.ad_copy.slice(0, 60) : 'view ad'} <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        ) : (r.ad_copy || '—')}
+                      </td>
+                      <td className="px-2 py-2 text-prospex-dim text-[10px] font-mono">{new Date(r.found_at).toLocaleDateString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

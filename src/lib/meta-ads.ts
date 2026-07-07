@@ -157,3 +157,71 @@ export function summariseAds(active: AdRow[], all: AdRow[], pageId: string): AdS
     total_ads_all_time: all.length,
   };
 }
+
+// ═══════════════════════════════════════════════════════
+// Seed-hunt classifier (Section 4 Mode 1 junk filter)
+// ═══════════════════════════════════════════════════════
+
+const CLINIC_VOCAB = [
+  'clinic', 'aesthetics', 'aesthetic', 'skin', 'laser', 'beauty', 'medspa',
+  'med spa', 'medi-spa', 'cosmetic', 'cosmetics', 'dermatology', 'dermatologist',
+  'anti-ageing', 'anti-aging', 'rejuvenation', 'rejuvination', 'facial',
+  'injectables', 'botox', 'filler', 'lipo', 'sculpt', 'contour', 'body',
+  'spa', 'wellness', 'esthetics',
+];
+
+// Agency vocab — pages hunting for clinics as customers
+const AGENCY_VOCAB = [
+  'leads', 'enquiries', 'inquiries', 'marketing agency', 'growth partner',
+  'guaranteed leads', 'grow your clinic', 'clinic marketing', 'medspa marketing',
+  'ad management', 'meta ads', 'facebook ads', 'roas', 'roi guarantee',
+  'lead generation', 'digital agency', 'ad agency', 'marketing partner',
+];
+
+// Hard-blocked noise categories
+const JUNK_VOCAB = [
+  'supplements', 'vitamins', 'skincare products', 'shop now', 'nutraceutical',
+  'training academy', 'course', 'certification', 'affiliate', 'ebook', 'ecourse',
+  'publisher', 'magazine', 'news', 'blog',
+];
+
+export type SeedClassification = 'clinic' | 'agency' | 'junk' | 'ambiguous';
+
+/**
+ * Classify a Meta Ad Library search result page.
+ * Returns:
+ *  - 'clinic' → likely a real clinic prospect
+ *  - 'agency' → other agency chasing the same market (competitor_watch)
+ *  - 'junk'   → product / publisher / course — drop
+ *  - 'ambiguous' → send to review queue for human decision
+ */
+export function classifySeedResult(input: {
+  page_name?: string | null;
+  ad_titles?: string[];
+  ad_bodies?: string[];
+  currency?: string | null;
+  expected_currency?: string | null; // GBP for GB, USD for US
+}): SeedClassification {
+  const parts = [
+    input.page_name || '',
+    ...(input.ad_titles || []),
+    ...(input.ad_bodies || []),
+  ].join(' ').toLowerCase();
+
+  // Currency mismatch is a hard filter for country-scoped hunts (Section 4 note)
+  if (input.expected_currency && input.currency && input.currency !== input.expected_currency) {
+    return 'junk';
+  }
+
+  // Junk categories drop first
+  if (JUNK_VOCAB.some(w => parts.includes(w))) return 'junk';
+
+  const hasClinic = CLINIC_VOCAB.some(w => parts.includes(w));
+  const hasAgency = AGENCY_VOCAB.some(w => parts.includes(w));
+
+  if (hasAgency && !hasClinic) return 'agency';
+  if (hasClinic && !hasAgency) return 'clinic';
+  if (hasClinic && hasAgency) return 'ambiguous'; // e.g. "clinic marketing" — needs eyeballs
+  return 'ambiguous';
+}
+

@@ -1,7 +1,9 @@
 // Send Hunt Mode lead cards to Slack. Uses the existing SLACK_BOT_TOKEN and
 // posts to a configurable channel (default #prospecting-hot-leads).
 
-const DEFAULT_CHANNEL = 'prospecting-hot-leads';
+// Default channel for Hunt Mode lead cards (Prospecting Hot Leads).
+// Override with SLACK_HUNT_CHANNEL env if you want them elsewhere.
+const DEFAULT_CHANNEL = 'C0APFTS0686';
 
 export interface LeadCardInput {
   score: number;
