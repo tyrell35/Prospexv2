@@ -128,6 +128,7 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
  if (!isOpen) return null;
 
  return (
+  <>
   <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={onClose}>
    <div className="bg-prospex-surface border border-prospex-border rounded-xl shadow-2xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
     {/* Header */}
@@ -248,34 +249,41 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
       <p className="text-[10px] text-red-400 mt-2 text-center">No Instagram URL available for this lead</p>
      )}
 
-     {sent && (
-      <p className="text-[10px] text-prospex-muted text-center mt-2">
-       ✓ Tab opened — confirm on the popup to log
-      </p>
+     {/* Fallback: explicit button to open the confirm modal after user's back from IG */}
+     {sent && lead.id && (
+      <button
+       onClick={(e) => { e.stopPropagation(); setConfirmOpen(true); }}
+       className="w-full mt-2 py-2 text-xs font-semibold rounded-lg bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/40 hover:bg-prospex-cyan/30 transition-colors flex items-center justify-center gap-2"
+      >
+       <Check className="w-3.5 h-3.5" /> Log this send · pick account
+      </button>
      )}
     </div>
    </div>
-
-   {/* Post-send confirmation modal */}
-   <SendConfirmModal
-    isOpen={confirmOpen}
-    onClose={() => setConfirmOpen(false)}
-    onLogged={() => { setConfirmOpen(false); onClose(); }}
-    lead={lead.id ? { id: lead.id, business_name: lead.business_name } : null}
-    channel={channel}
-    stage={(() => {
-     const tmpl = QUICK_TEMPLATES.find(t => t.id === selectedTemplate);
-     if (tmpl?.stage === 'Cold Open') return 'cold_open';
-     if (tmpl?.stage === 'Follow-Up') return 'follow_up_1';
-     if (tmpl?.stage === 'Breakup') return 'follow_up_3';
-     if (tmpl?.stage === 'Objection') return 'objection';
-     if (tmpl?.stage === 'Booking') return 'booking';
-     if (tmpl?.stage === 'Reactivation') return 'reactivation';
-     return 'cold_open';
-    })()}
-    messageSent={message}
-    templateName={QUICK_TEMPLATES.find(t => t.id === selectedTemplate)?.name}
-   />
   </div>
+
+  {/* Post-send confirmation modal — rendered AS SIBLING of the QuickMessage
+      backdrop (not a child) so it lives in its own stacking context and
+      clicks on its backdrop don't propagate up to close QuickMessage. */}
+  <SendConfirmModal
+   isOpen={confirmOpen}
+   onClose={() => setConfirmOpen(false)}
+   onLogged={() => { setConfirmOpen(false); onClose(); }}
+   lead={lead.id ? { id: lead.id, business_name: lead.business_name } : null}
+   channel={channel}
+   stage={(() => {
+    const tmpl = QUICK_TEMPLATES.find(t => t.id === selectedTemplate);
+    if (tmpl?.stage === 'Cold Open') return 'cold_open';
+    if (tmpl?.stage === 'Follow-Up') return 'follow_up_1';
+    if (tmpl?.stage === 'Breakup') return 'follow_up_3';
+    if (tmpl?.stage === 'Objection') return 'objection';
+    if (tmpl?.stage === 'Booking') return 'booking';
+    if (tmpl?.stage === 'Reactivation') return 'reactivation';
+    return 'cold_open';
+   })()}
+   messageSent={message}
+   templateName={QUICK_TEMPLATES.find(t => t.id === selectedTemplate)?.name}
+  />
+  </>
  );
 }

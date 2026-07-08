@@ -1119,6 +1119,17 @@ export default function LeadDetailPage() {
                          : '📋 Copy SMS'}
                       </button>
                     </div>
+
+                    {/* Fallback: explicit "Log this send" button appears once user has clicked Copy & Open.
+                        Guarantees the confirm modal fires even if state was lost across tab switches. */}
+                    {confirmSendPayload && lead && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setConfirmSendOpen(true); }}
+                        className="w-full mt-2 py-2 text-xs font-semibold rounded-lg bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/40 hover:bg-prospex-cyan/30 transition-colors flex items-center justify-center gap-2"
+                      >
+                        <Check className="w-3.5 h-3.5" /> Log this send · pick account
+                      </button>
+                    )}
                   </>
                 ) : (
                   <div className="flex-1 flex items-center justify-center">
