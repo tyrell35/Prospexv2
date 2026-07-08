@@ -51,7 +51,12 @@ async function logOutreach(body: Record<string, unknown>) {
     message_sent,
     sent_by,
     notes,
-  } = body;
+    sender_account,             // NEW — IG account username the message was sent from
+    outcome = 'sent',            // NEW — 'sent' | 'draft' | 'blocked' | 'unsent'
+    confirmed = true,            // NEW — was this manually confirmed by the user?
+  } = body as Record<string, unknown> & {
+    sender_account?: string; outcome?: string; confirmed?: boolean;
+  };
 
   if (!lead_id) return NextResponse.json({ error: 'lead_id required' }, { status: 400 });
 
@@ -107,6 +112,7 @@ async function logOutreach(body: Record<string, unknown>) {
   await supabase.from('leads').update(updateData).eq('id', lead_id as string);
 
   // Log to outreach_logs
+  const wasSuccessfullySent = outcome === 'sent';
   await supabase.from('outreach_logs').insert({
     lead_id: lead_id,
     lead_name: sent_by || '',
@@ -114,17 +120,43 @@ async function logOutreach(body: Record<string, unknown>) {
     niche: lead.niche || '',
     channel: channel,
     stage: stage,
-    outcome: 'sent',
+    outcome,
     message_sent: message_sent || '',
     sent_by: sent_by || '',
+    sender_account: sender_account || null,
+    confirmed_at: confirmed ? now : null,
     notes: notes || '',
   });
+
+  // When the user confirms a successful send AND identifies which IG account
+  // was used, bump the account's per-day counter + total.
+  let account_counter: { daily_sent_today: number; daily_limit: number } | null = null;
+  if (wasSuccessfullySent && sender_account && channel === 'instagram') {
+    const { data: acc } = await supabase
+      .from('ig_accounts')
+      .select('id, daily_sent_today, daily_limit, total_sent')
+      .eq('username', sender_account)
+      .maybeSingle();
+    const accRow = acc as { id: string; daily_sent_today: number | null; daily_limit: number | null; total_sent: number | null } | null;
+    if (accRow) {
+      const nextDaily = (accRow.daily_sent_today || 0) + 1;
+      const nextTotal = (accRow.total_sent || 0) + 1;
+      await supabase.from('ig_accounts').update({
+        daily_sent_today: nextDaily,
+        total_sent: nextTotal,
+        last_sent_at: now,
+        updated_at: now,
+      }).eq('id', accRow.id);
+      account_counter = { daily_sent_today: nextDaily, daily_limit: accRow.daily_limit || 30 };
+    }
+  }
 
   return NextResponse.json({
     success: true,
     new_status: newStatus,
     follow_up_count: followUpCount,
     next_action_at: updateData.next_action_at,
+    account_counter,
   });
 }
 

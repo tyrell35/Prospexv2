@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { X, MessageCircle, Instagram, ExternalLink, Check, SkipForward, Zap, ChevronRight, AlertCircle, Loader2 } from 'lucide-react';
+import SendConfirmModal from './SendConfirmModal';
 
 interface BlasterLead {
   id: string;
@@ -97,43 +98,6 @@ function buildOpenUrl(lead: BlasterLead, channel: 'whatsapp' | 'instagram', mess
   return url || null;
 }
 
-const STAGE_MAP: Record<string, string> = { 'Cold Open': 'cold_open', 'Follow-Up': 'follow_up_1', 'Breakup': 'follow_up_3' };
-
-function logOutreach(lead: BlasterLead, channel: string, template: Template | undefined, message: string) {
-  const stage = STAGE_MAP[template?.stage || ''] || 'cold_open';
-
-  try {
-    const logsRaw = localStorage.getItem('prospex_outreach_logs') || '[]';
-    const logs = JSON.parse(logsRaw);
-    logs.unshift({
-      id: crypto.randomUUID(),
-      created_at: new Date().toISOString(),
-      lead_id: lead.id,
-      lead_name: lead.business_name,
-      channel,
-      stage,
-      outcome: 'sent',
-      message,
-      source: 'blaster',
-    });
-    localStorage.setItem('prospex_outreach_logs', JSON.stringify(logs.slice(0, 1000)));
-  } catch {}
-
-  // Also fire to backend tracker (best-effort)
-  fetch('/api/outreach-tracker', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      action: 'log_outreach',
-      lead_id: lead.id,
-      channel,
-      stage,
-      message_sent: message,
-      sent_by: 'blaster',
-    }),
-  }).catch(() => {});
-}
-
 export default function OutreachBlaster({ isOpen, onClose, channel, leads }: Props) {
   const eligibleLeads = useMemo(() => leads.filter(l => isEligible(l, channel)), [leads, channel]);
   const ineligibleCount = leads.length - eligibleLeads.length;
@@ -206,14 +170,18 @@ export default function OutreachBlaster({ isOpen, onClose, channel, leads }: Pro
     }
   };
 
+  // Post-send confirmation modal state
+  const [confirmingLead, setConfirmingLead] = useState<BlasterLead | null>(null);
+  const [confirmingMessage, setConfirmingMessage] = useState('');
+
   const handleSend = () => {
     if (!currentLead) return;
     const url = buildOpenUrl(currentLead, channel, editedMessage);
     navigator.clipboard.writeText(editedMessage).catch(() => {});
     if (url) window.open(url, '_blank');
-    setSentIds(prev => new Set(prev).add(currentLead.id));
-    logOutreach(currentLead, channel, template, editedMessage);
-    advance();
+    // Open the confirmation modal — logging happens on user confirmation, not on tab-open.
+    setConfirmingMessage(editedMessage);
+    setConfirmingLead(currentLead);
   };
 
   const handleSkip = () => {
@@ -467,6 +435,34 @@ export default function OutreachBlaster({ isOpen, onClose, channel, leads }: Pro
           )}
         </div>
       </div>
+
+      {/* Post-send confirmation modal — pops after Copy & Open. User confirms
+          success + picks which account they sent from; then blaster advances. */}
+      <SendConfirmModal
+        isOpen={!!confirmingLead}
+        onClose={() => {
+          // User skipped without logging — still advance so blaster isn't stuck
+          if (confirmingLead) {
+            setSentIds(prev => new Set(prev).add(confirmingLead.id));
+            setConfirmingLead(null);
+            setConfirmingMessage('');
+            advance();
+          }
+        }}
+        onLogged={() => {
+          if (confirmingLead) {
+            setSentIds(prev => new Set(prev).add(confirmingLead.id));
+            setConfirmingLead(null);
+            setConfirmingMessage('');
+            advance();
+          }
+        }}
+        lead={confirmingLead ? { id: confirmingLead.id, business_name: confirmingLead.business_name } : null}
+        channel={channel}
+        stage={template?.stage === 'Cold Open' ? 'cold_open' : template?.stage === 'Follow-Up' ? 'follow_up_1' : 'cold_open'}
+        messageSent={confirmingMessage}
+        templateName={template?.name}
+      />
     </div>
   );
 }

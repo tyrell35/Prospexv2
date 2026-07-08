@@ -8,6 +8,7 @@ import { cn, getScoreColor, getSourceConfig, getPriorityConfig, formatDate } fro
 import type { Lead, TableSort, TableFilter } from '@/lib/types';
 import QuickMessage from '@/components/QuickMessage';
 import OutreachBlaster from '@/components/OutreachBlaster';
+import TodaysDmsStrip from '@/components/TodaysDmsStrip';
 import ExportLeadsModal from '@/components/ExportLeadsModal';
 import { Zap } from 'lucide-react';
 
@@ -149,6 +150,9 @@ export default function LeadsPage() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-4">
+      {/* Today's DMs — live per-account tally + push to Slack */}
+      <TodaysDmsStrip />
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-mono font-bold text-prospex-text flex items-center gap-3"><Database className="w-6 h-6 text-prospex-cyan" />Lead Database</h1>

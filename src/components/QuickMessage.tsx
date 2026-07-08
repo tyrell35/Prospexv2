@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { X, MessageCircle, Instagram, Copy, ExternalLink, Check, ChevronDown, Send, Sparkles, BookOpen } from 'lucide-react';
+import SendConfirmModal from './SendConfirmModal';
 
 // ─── TYPES ──────────────────────────────────────────────────
 interface QuickMessageProps {
@@ -9,6 +10,7 @@ interface QuickMessageProps {
  onClose: () => void;
  channel: 'whatsapp' | 'instagram';
  lead: {
+  id?: string;                    // used for logging via SendConfirmModal
   business_name: string;
   phone?: string | null;
   instagram_url?: string | null;
@@ -94,6 +96,8 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
   setTimeout(() => setCopied(false), 2000);
  };
 
+ const [confirmOpen, setConfirmOpen] = useState(false);
+
  const handleSend = () => {
   if (channel === 'whatsapp') {
    const phone = lead.phone?.replace(/[^0-9+]/g, '').replace('+', '') || '';
@@ -112,27 +116,8 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
    }
   }
   setSent(true);
-
-  // Auto-log to outreach analytics (localStorage)
-  try {
-   const logsRaw = localStorage.getItem('prospex_outreach_logs') || '[]';
-   const logs = JSON.parse(logsRaw);
-   const tmpl = QUICK_TEMPLATES.find(t => t.id === selectedTemplate);
-   logs.unshift({
-    id: crypto.randomUUID(),
-    created_at: new Date().toISOString(),
-    lead_name: lead.business_name || 'Unknown',
-    lead_business: lead.business_name || '',
-    niche: 'other',
-    channel,
-    stage: tmpl?.stage === 'Cold Open' ? 'cold_open' : tmpl?.stage === 'Follow-Up' ? 'follow_up_1' : tmpl?.stage === 'Breakup' ? 'follow_up_3' : tmpl?.stage === 'Objection' ? 'objection' : tmpl?.stage === 'Booking' ? 'booking' : tmpl?.stage === 'Reactivation' ? 'reactivation' : 'cold_open',
-    outcome: 'sent',
-    revenue: 0,
-    notes: '',
-    template_used: tmpl?.name || 'Custom',
-   });
-   localStorage.setItem('prospex_outreach_logs', JSON.stringify(logs));
-  } catch { /* silent */ }
+  // Pop the confirmation modal — only writes to outreach_logs on user confirm.
+  if (lead.id) setConfirmOpen(true);
  };
 
  const currentTemplate = QUICK_TEMPLATES.find(t => t.id === selectedTemplate);
@@ -265,11 +250,32 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
 
      {sent && (
       <p className="text-[10px] text-prospex-muted text-center mt-2">
-       ✓ Auto-logged to Outreach Analytics
+       ✓ Tab opened — confirm on the popup to log
       </p>
      )}
     </div>
    </div>
+
+   {/* Post-send confirmation modal */}
+   <SendConfirmModal
+    isOpen={confirmOpen}
+    onClose={() => setConfirmOpen(false)}
+    onLogged={() => { setConfirmOpen(false); onClose(); }}
+    lead={lead.id ? { id: lead.id, business_name: lead.business_name } : null}
+    channel={channel}
+    stage={(() => {
+     const tmpl = QUICK_TEMPLATES.find(t => t.id === selectedTemplate);
+     if (tmpl?.stage === 'Cold Open') return 'cold_open';
+     if (tmpl?.stage === 'Follow-Up') return 'follow_up_1';
+     if (tmpl?.stage === 'Breakup') return 'follow_up_3';
+     if (tmpl?.stage === 'Objection') return 'objection';
+     if (tmpl?.stage === 'Booking') return 'booking';
+     if (tmpl?.stage === 'Reactivation') return 'reactivation';
+     return 'cold_open';
+    })()}
+    messageSent={message}
+    templateName={QUICK_TEMPLATES.find(t => t.id === selectedTemplate)?.name}
+   />
   </div>
  );
 }

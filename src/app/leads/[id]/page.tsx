@@ -39,6 +39,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getScoreBgColor, getGrade, getSourceConfig, getPriorityConfig, formatDate, formatRelativeTime } from '@/lib/utils';
 import type { Lead, DeepAudit, ActivityLog } from '@/lib/types';
+import SendConfirmModal from '@/components/SendConfirmModal';
 
 function AuditCheck({ label, value, type = 'boolean' }: { label: string; value: boolean | number | null; type?: 'boolean' | 'score' }) {
   if (value === null || value === undefined) {
@@ -396,6 +397,9 @@ export default function LeadDetailPage() {
     setEditedMessage(template.filled_content);
   };
 
+  const [confirmSendOpen, setConfirmSendOpen] = useState(false);
+  const [confirmSendPayload, setConfirmSendPayload] = useState<{ message: string; stage: string; templateName: string; channel: 'instagram' | 'whatsapp' | 'sms' } | null>(null);
+
   const copyAndOpen = (openLink: boolean) => {
     navigator.clipboard.writeText(editedMessage);
     setCopiedMessage(true);
@@ -411,18 +415,17 @@ export default function LeadDetailPage() {
       }
     }
 
-    fetch('/api/outreach-tracker', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'log_outreach',
-        lead_id: lead?.id,
-        channel: templateChannel,
+    // Open the post-send confirmation modal — user picks account + confirms outcome.
+    // Only actually opens on real send-and-open, not on plain Copy.
+    if (openLink && lead?.id) {
+      setConfirmSendPayload({
+        message: editedMessage,
         stage: selectedTemplate?.category || 'cold_open',
-        message_sent: editedMessage,
-        sent_by: 'manual',
-      }),
-    });
+        templateName: selectedTemplate?.name || 'Custom',
+        channel: templateChannel,
+      });
+      setConfirmSendOpen(true);
+    }
   };
 
   if (loading) {
@@ -1119,6 +1122,18 @@ export default function LeadDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Post-send confirmation modal — pops after Copy & Open in the template picker */}
+      <SendConfirmModal
+        isOpen={confirmSendOpen}
+        onClose={() => setConfirmSendOpen(false)}
+        onLogged={() => setConfirmSendOpen(false)}
+        lead={lead && confirmSendPayload ? { id: lead.id, business_name: lead.business_name } : null}
+        channel={confirmSendPayload?.channel || 'instagram'}
+        stage={confirmSendPayload?.stage}
+        messageSent={confirmSendPayload?.message}
+        templateName={confirmSendPayload?.templateName}
+      />
     </div>
   );
 }
