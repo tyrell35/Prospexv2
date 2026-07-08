@@ -9,7 +9,7 @@ import { searchAdsByKeyword, classifySeedResult, type AdRow } from '@/lib/meta-a
 //
 //   A. Live search (mode='search'):
 //      Body: { keyword: 'morpheus8', country: 'GB', limit: 50 }
-//      Hits Meta Ads Library with META_ADS_TOKEN and writes each unique page
+//      Hits Meta Ads Library with META_AD_LIBRARY_TOKEN and writes each unique page
 //      to hunt_ad_library_queue. Classified as clinic/agency/junk/ambiguous.
 //
 //   B. Manual import (mode='import'):
@@ -79,9 +79,9 @@ export async function POST(request: NextRequest) {
 async function handleSearch(body: SearchBody) {
   const { keyword, country = 'GB', limit = 50 } = body;
   if (!keyword) return NextResponse.json({ error: 'keyword required' }, { status: 400 });
-  if (!process.env.META_ADS_TOKEN) {
+  if (!(process.env.META_AD_LIBRARY_TOKEN || process.env.META_ACCESS_TOKEN || process.env.META_ADS_TOKEN)) {
     return NextResponse.json({
-      error: 'META_ADS_TOKEN not set. Either configure the token in Vercel env vars, or use mode=import to push pre-fetched ads.',
+      error: 'META_AD_LIBRARY_TOKEN not set. Either configure the token in Vercel env vars, or use mode=import to push pre-fetched ads.',
     }, { status: 400 });
   }
 

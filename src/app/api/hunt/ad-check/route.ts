@@ -9,7 +9,7 @@ import { isoCountry } from '@/lib/hunt';
 // Mode 2: per-lead ad qualification via Meta Ad Library.
 // Requires the lead to have a fb_page_id in hunt_enrichment (populated by
 // /api/hunt/enrich). Writes hunt_ad_intel and snapshots ad_snapshots.
-// If META_ADS_TOKEN is not set, records ads_active=false with a warning.
+// If META_AD_LIBRARY_TOKEN is not set, records ads_active=false with a warning.
 // ═══════════════════════════════════════════════════════
 
 interface AdCheckRequest {
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
   const body = (await request.json().catch(() => ({}))) as AdCheckRequest;
   const limit = Math.min(100, body.limit || 20);
   const refetch = !!body.refetch;
-  const hasToken = !!process.env.META_ADS_TOKEN;
+  const hasToken = !!(process.env.META_AD_LIBRARY_TOKEN || process.env.META_ACCESS_TOKEN || process.env.META_ADS_TOKEN);
 
   // Load leads that have an fb_page_id
   let leadQuery = supabaseAdmin
@@ -121,7 +121,7 @@ export async function POST(request: NextRequest) {
     success: true,
     processed: results.length,
     token_configured: hasToken,
-    ...(!hasToken && { warning: 'META_ADS_TOKEN not set — all leads recorded as ads_active=false. Add the token and refetch to see real data.' }),
+    ...(!hasToken && { warning: 'META_AD_LIBRARY_TOKEN not set — all leads recorded as ads_active=false. Add the token and refetch to see real data.' }),
     ads_active_count: results.filter(r => r.ads_active).length,
     results,
   });

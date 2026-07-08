@@ -27,8 +27,17 @@ const AD_FIELDS = [
   'publisher_platforms', 'currency', 'languages',
 ].join(',');
 
+// Standardise on the same env var name the rest of the codebase already uses
+// (ad-detection, ad-library, market-analysis, ad-intelligence). Falls back to
+// META_ACCESS_TOKEN (ad-detection also does this) and finally to the older
+// META_ADS_TOKEN name for backward compatibility if it was set earlier.
 function token(): string | null {
-  return process.env.META_ADS_TOKEN || null;
+  return (
+    process.env.META_AD_LIBRARY_TOKEN ||
+    process.env.META_ACCESS_TOKEN ||
+    process.env.META_ADS_TOKEN ||
+    null
+  );
 }
 
 /**

@@ -501,7 +501,7 @@ function ReviewQueuePanel({ onPromoted }: { onPromoted: () => void }) {
                   {seeding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} Search
                 </button>
               </div>
-              <p className="text-[10px] text-prospex-dim">Requires <code className="text-prospex-text">META_ADS_TOKEN</code>. For MCP-based seeding push into <code className="text-prospex-text">POST /api/hunt/seed-adlibrary</code> with <code className="text-prospex-text">mode=&quot;import&quot;</code>.</p>
+              <p className="text-[10px] text-prospex-dim">Requires <code className="text-prospex-text">META_AD_LIBRARY_TOKEN</code>. For MCP-based seeding push into <code className="text-prospex-text">POST /api/hunt/seed-adlibrary</code> with <code className="text-prospex-text">mode=&quot;import&quot;</code>.</p>
             </div>
           )}
 
