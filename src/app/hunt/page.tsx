@@ -199,6 +199,9 @@ export default function HuntPage() {
           <button onClick={runHunt} disabled={running} className="btn-primary text-xs disabled:opacity-50">
             {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />} Run Hunt
           </button>
+          <Link href="/hunt/top-clinics" className="btn text-xs bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/40 hover:bg-prospex-cyan/30">
+            👑 Top Clinics
+          </Link>
           <button onClick={load} className="btn-ghost text-xs"><RefreshCw className="w-3.5 h-3.5" /> Refresh</button>
         </div>
       </div>

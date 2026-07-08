@@ -16,10 +16,13 @@ import { authOr401 } from '@/lib/api-auth';
 // - IG DM opener < 60 words, email opener < 90
 // ═══════════════════════════════════════════════════════
 
+type TopTier = 'top_tier_no_ads' | 'top_tier_with_ads' | 'top_tier_multi_device';
+
 interface PersonalizeRequest {
   lead_ids?: string[];
   channel?: 'instagram_dm' | 'email' | 'sms';
   limit?: number;
+  tier?: TopTier; // when set, base the prompt on the matching seeded template
 }
 
 interface LeadJoin {
@@ -49,7 +52,35 @@ function locale(country: string | null): 'UK' | 'US' | 'CA' {
   return 'US';
 }
 
-function buildPrompt(lead: LeadJoin, channel: 'instagram_dm' | 'email' | 'sms'): string {
+function inferTopTier(lead: LeadJoin): TopTier | null {
+  const tierA = lead.enrich?.tier_a_count || 0;
+  const activeAds = !!lead.intel?.ads_active;
+  const reviews = lead.enrich?.google_review_count || 0;
+  const devices = (lead.enrich?.devices_found || []).length;
+  // Not strictly "top-tier" material — skip
+  if (reviews < 20 || tierA < 1) return null;
+  if (devices >= 3) return 'top_tier_multi_device';
+  if (activeAds) return 'top_tier_with_ads';
+  return 'top_tier_no_ads';
+}
+
+// Load a seeded template (id, content) for the given tier + channel. Caller can
+// use the content as an exemplar seeded into the LLM prompt.
+async function loadTemplateExemplar(tier: TopTier, channel: 'instagram_dm' | 'email' | 'sms'): Promise<string | null> {
+  const tmplChannel = channel === 'instagram_dm' ? 'instagram' : channel === 'email' ? 'email' : 'whatsapp';
+  const { data } = await supabaseAdmin
+    .from('conversation_templates')
+    .select('content')
+    .eq('category', tier)
+    .eq('is_active', true)
+    .or(`channel.eq.${tmplChannel},channel.eq.all,channel.eq.instagram`)
+    .limit(1)
+    .maybeSingle();
+  const row = data as { content: string } | null;
+  return row?.content ?? null;
+}
+
+function buildPrompt(lead: LeadJoin, channel: 'instagram_dm' | 'email' | 'sms', tierExemplar?: string | null, tier?: TopTier | null): string {
   const loc = locale(lead.country);
   const wordCap = channel === 'email' ? 90 : channel === 'sms' ? 40 : 60;
   const spelling = loc === 'US' ? 'American English (color, realize, organize)' : 'British English (colour, realise, organise)';
@@ -79,6 +110,17 @@ function buildPrompt(lead: LeadJoin, channel: 'instagram_dm' | 'email' | 'sms'):
     angleHint = 'Fallback: reference one visible signal (device, booking system, review count) as the observation.';
   }
 
+  const tierBlock = tierExemplar
+    ? `
+
+TOP-TIER EXEMPLAR (${tier || 'top_tier'}):
+This clinic is a top-tier prospect. Rewrite the following exemplar in the writer's own voice, filling in the specific facts from the TARGET block above. Preserve the exemplar's tone, structure, and specific numbers where they still apply. Never copy verbatim — paraphrase.
+
+Exemplar:
+${tierExemplar}
+`
+    : '';
+
   return `You are writing outbound outreach for Infinity Clients, an agency for aesthetic clinics.
 
 TARGET:
@@ -92,7 +134,7 @@ ${otherAgency ? 'FLAG: has_other_agency (GHL/LeadConnector detected)' : ''}
 
 ANGLE:
 ${angleHint}
-
+${tierBlock}
 WRITE:
 - Channel: ${channel === 'instagram_dm' ? 'Instagram DM' : channel === 'email' ? 'cold email' : 'SMS'}
 - Language: ${spelling}
@@ -177,9 +219,12 @@ export async function POST(request: NextRequest) {
     .in('id', targetIds);
   const leads = ((leadsData || []) as unknown) as LeadJoin[];
 
-  const results: Array<{ lead_id: string; ok: boolean; angle?: string; error?: string }> = [];
+  const results: Array<{ lead_id: string; ok: boolean; angle?: string; tier?: TopTier | null; error?: string }> = [];
   for (const lead of leads) {
-    const prompt = buildPrompt(lead, channel);
+    // Explicit tier from request → use it. Else auto-infer from lead signals.
+    const resolvedTier: TopTier | null = body.tier || inferTopTier(lead);
+    const exemplar = resolvedTier ? await loadTemplateExemplar(resolvedTier, channel) : null;
+    const prompt = buildPrompt(lead, channel, exemplar, resolvedTier);
     const out = await callClaude(prompt, apiKey);
     if (!out) {
       results.push({ lead_id: lead.id, ok: false, error: 'Claude call failed' });
@@ -192,7 +237,7 @@ export async function POST(request: NextRequest) {
       angle: out.angle,
       follow_up_1: out.follow_up_1,
     });
-    results.push({ lead_id: lead.id, ok: true, angle: out.angle });
+    results.push({ lead_id: lead.id, ok: true, angle: out.angle, tier: resolvedTier });
   }
 
   return NextResponse.json({
