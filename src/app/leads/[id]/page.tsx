@@ -386,7 +386,18 @@ export default function LeadDetailPage() {
       filled_content: personalizeTemplate(t.content),
     }));
 
-    setTemplates(filled);
+    // Prepend a "Custom Message" pseudo-template so the user can type freely
+    // without picking a canned template. Selecting it clears the editor.
+    const custom = {
+      id: 'custom',
+      name: '✍️ Write Custom Message',
+      category: 'custom',
+      channel,
+      content: '',
+      filled_content: '',
+    };
+
+    setTemplates([custom, ...filled]);
     setShowTemplatePicker(true);
     setSelectedTemplate(null);
     setEditedMessage('');
@@ -1042,7 +1053,8 @@ export default function LeadDetailPage() {
                 </div>
 
                 {templates
-                  .filter(t => templateFilter === 'all' || t.category === templateFilter)
+                  // Always keep the ✍️ Custom option visible regardless of filter
+                  .filter(t => t.id === 'custom' || templateFilter === 'all' || t.category === templateFilter)
                   .map((t: any) => (
                   <button key={t.id} onClick={() => selectTemplate(t)}
                     className={`w-full text-left p-2.5 rounded-lg transition-colors ${

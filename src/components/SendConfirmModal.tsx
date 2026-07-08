@@ -173,7 +173,7 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
   const ChannelIcon = cm.icon;
 
   return (
-    <div className="fixed inset-0 bg-black/70 z-[60] flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-prospex-surface border border-prospex-border rounded-xl w-full max-w-lg mx-2 md:mx-auto" onClick={e => e.stopPropagation()}>
         <div className="p-4 border-b border-prospex-border flex items-center justify-between">
           <div className="flex items-center gap-2 min-w-0">
