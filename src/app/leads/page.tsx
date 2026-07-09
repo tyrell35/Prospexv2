@@ -65,11 +65,20 @@ export default function LeadsPage() {
   const [msgLead, setMsgLead] = useState<Lead | null>(null);
   const [blasterChannel, setBlasterChannel] = useState<null | 'whatsapp' | 'instagram'>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [enriching, setEnriching] = useState(false);
 
   // Unique values for filter dropdowns
   const [uniqueNiches, setUniqueNiches] = useState<string[]>([]);
   const [uniqueCountries, setUniqueCountries] = useState<string[]>([]);
   const [uniqueCities, setUniqueCities] = useState<string[]>([]);
+
+  // ─── Device / machine filter ─────────────────────────────
+  interface DeviceOption { device_name: string; tier: 'A' | 'B' | 'C'; }
+  const [deviceCatalog, setDeviceCatalog] = useState<DeviceOption[]>([]);
+  const [deviceFilter, setDeviceFilter] = useState<string[]>([]);          // exact device_name values
+  const [deviceTierFilter, setDeviceTierFilter] = useState<'A' | 'B' | ''>('');
+  const [deviceMatchMode, setDeviceMatchMode] = useState<'any' | 'all'>('any');
+  const [deviceIdMask, setDeviceIdMask] = useState<Set<string> | null>(null); // ids that pass current filter
 
   // Fetch unique filter values
   useEffect(() => {
@@ -85,9 +94,36 @@ export default function LeadsPage() {
       const { data: cityData } = await supabase.from('leads').select('city').not('city', 'is', null);
       const citiesList = [...new Set((cityData || []).map(d => d.city).filter(Boolean))].sort();
       setUniqueCities(citiesList);
+
+      // Devices from the seeded dictionary — Tier A/B are worth filtering on
+      const { data: devData } = await supabase.from('device_keywords').select('device_name, tier').eq('active', true).in('tier', ['A', 'B']).order('tier').order('device_name');
+      setDeviceCatalog((devData || []) as DeviceOption[]);
     };
     fetchFilterOptions();
   }, []);
+
+  // Resolve device filter → set of lead_ids that match. Runs whenever the
+  // device filter changes; leaves deviceIdMask=null if nothing selected so
+  // fetchLeads knows to skip the extra WHERE clause.
+  useEffect(() => {
+    const hasFilter = deviceFilter.length > 0 || !!deviceTierFilter;
+    if (!hasFilter) { setDeviceIdMask(null); return; }
+    let cancelled = false;
+    (async () => {
+      let q = supabase.from('hunt_enrichment').select('lead_id, devices_found, tier_a_count, tier_b_count').limit(20000);
+      // Array containment vs overlap depending on mode
+      if (deviceFilter.length > 0) {
+        if (deviceMatchMode === 'all') q = q.contains('devices_found', deviceFilter);
+        else q = q.overlaps('devices_found', deviceFilter);
+      }
+      if (deviceTierFilter === 'A') q = q.gte('tier_a_count', 1);
+      if (deviceTierFilter === 'B') q = q.gte('tier_b_count', 1);
+      const { data } = await q;
+      if (cancelled) return;
+      setDeviceIdMask(new Set((data || []).map(r => (r as { lead_id: string }).lead_id)));
+    })();
+    return () => { cancelled = true; };
+  }, [deviceFilter, deviceTierFilter, deviceMatchMode]);
 
   const fetchLeads = useCallback(async () => {
     setLoading(true);
@@ -101,13 +137,21 @@ export default function LeadsPage() {
       if (nicheFilter) query = query.eq('niche', nicheFilter);
       if (countryFilter) query = query.eq('country', countryFilter);
       if (cityFilter) query = query.eq('city', cityFilter);
+      // Device filter — apply the pre-resolved id mask
+      if (deviceIdMask) {
+        const ids = Array.from(deviceIdMask);
+        if (ids.length === 0) {
+          setLeads([]); setTotalCount(0); setLoading(false); return;
+        }
+        query = query.in('id', ids);
+      }
       const { data, count, error } = await query;
       if (error) throw error;
       setLeads(data || []);
       setTotalCount(count || 0);
     } catch (error) { console.error('Failed to fetch leads:', error); }
     finally { setLoading(false); }
-  }, [sort, filter, page, nicheFilter, countryFilter, cityFilter]);
+  }, [sort, filter, page, nicheFilter, countryFilter, cityFilter, deviceIdMask]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
 
@@ -137,10 +181,38 @@ export default function LeadsPage() {
     setNicheFilter('');
     setCountryFilter('');
     setCityFilter('');
+    setDeviceFilter([]);
+    setDeviceTierFilter('');
     setPage(0);
   };
 
-  const activeFilterCount = [filter.source, filter.priority, nicheFilter, countryFilter, cityFilter].filter(Boolean).length;
+  const activeFilterCount = [filter.source, filter.priority, nicheFilter, countryFilter, cityFilter, deviceTierFilter, deviceFilter.length > 0 ? 'devices' : null].filter(Boolean).length;
+
+  const toggleDeviceInFilter = (name: string) => {
+    setDeviceFilter(prev => prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name]);
+    setPage(0);
+  };
+
+  const enrichSelected = async () => {
+    if (selectedIds.size === 0 || enriching) return;
+    setEnriching(true);
+    try {
+      const res = await fetch('/api/hunt/enrich', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_ids: Array.from(selectedIds), refetch: true }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert(`Enriched ${data.processed} lead${data.processed === 1 ? '' : 's'}. ${data.with_devices || 0} had detected devices.`);
+        fetchLeads();
+      } else {
+        alert(`Enrich failed: ${data.error || 'unknown'}`);
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Enrich failed');
+    } finally { setEnriching(false); }
+  };
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
   const SortIcon = ({ column }: { column: string }) => {
@@ -192,6 +264,14 @@ export default function LeadsPage() {
             <div className="w-px h-6 bg-prospex-border" />
             <button onClick={async () => { await fetch('/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: Array.from(selectedIds) }) }); fetchLeads(); }} className="btn-ghost text-xs" title="Score selected leads">⭐ Score ({selectedIds.size})</button>
             <button onClick={async () => { await fetch('/api/enrich', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: Array.from(selectedIds) }) }); fetchLeads(); }} className="btn-ghost text-xs" title="Enrich emails from websites">🔍 Enrich ({selectedIds.size})</button>
+            <button
+              onClick={enrichSelected}
+              disabled={enriching}
+              title="Detect devices/machines by scanning each lead's website"
+              className="btn-ghost text-xs disabled:opacity-50"
+            >
+              {enriching ? '⏳' : '🔬'} Enrich Devices ({selectedIds.size})
+            </button>
             <button onClick={() => setBlasterChannel('whatsapp')} className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30" title="Blast WhatsApp messages"><Zap className="w-3.5 h-3.5" /> Blast WA ({selectedIds.size})</button>
             <button onClick={() => setBlasterChannel('instagram')} className="btn text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30" title="Blast Instagram DMs"><Zap className="w-3.5 h-3.5" /> Blast IG ({selectedIds.size})</button>
             <button onClick={handleExportCSV} className="btn-primary text-xs"><Download className="w-3.5 h-3.5" /> Export ({selectedIds.size})</button>
@@ -237,6 +317,64 @@ export default function LeadsPage() {
             {activeFilterCount > 0 && (
               <button onClick={clearAllFilters} className="text-[10px] text-prospex-muted hover:text-red-400 transition-colors underline">Clear all filters</button>
             )}
+
+            {/* Devices / Machines filter */}
+            <div className="w-full mt-2 pt-2 border-t border-prospex-border/50">
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <span className="text-[10px] font-mono text-prospex-dim uppercase">🔬 Devices</span>
+                <div className="flex items-center gap-1">
+                  {(['A', 'B'] as const).map(t => (
+                    <button key={t} onClick={() => { setDeviceTierFilter(deviceTierFilter === t ? '' : t); setPage(0); }}
+                      className={cn('text-[10px] px-2 py-0.5 rounded font-mono',
+                        deviceTierFilter === t
+                          ? (t === 'A' ? 'bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30')
+                          : 'bg-prospex-bg text-prospex-dim hover:text-prospex-text')}>
+                      Any Tier {t}
+                    </button>
+                  ))}
+                </div>
+                {deviceFilter.length > 1 && (
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => setDeviceMatchMode('any')}
+                      className={cn('text-[9px] px-1.5 py-0.5 rounded font-mono',
+                        deviceMatchMode === 'any' ? 'bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/30' : 'bg-prospex-bg text-prospex-dim')}>
+                      any match
+                    </button>
+                    <button onClick={() => setDeviceMatchMode('all')}
+                      className={cn('text-[9px] px-1.5 py-0.5 rounded font-mono',
+                        deviceMatchMode === 'all' ? 'bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/30' : 'bg-prospex-bg text-prospex-dim')}>
+                      all match
+                    </button>
+                  </div>
+                )}
+                {(deviceFilter.length > 0 || deviceTierFilter) && (
+                  <span className="text-[10px] text-prospex-dim">
+                    {deviceIdMask ? `matches ${deviceIdMask.size} enriched lead${deviceIdMask.size === 1 ? '' : 's'}` : '…'}
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {deviceCatalog.map(d => {
+                  const active = deviceFilter.includes(d.device_name);
+                  const tierColor = d.tier === 'A' ? 'text-prospex-cyan border-prospex-cyan/30' : 'text-amber-400 border-amber-500/30';
+                  return (
+                    <button key={d.device_name} onClick={() => toggleDeviceInFilter(d.device_name)}
+                      className={cn('text-[10px] px-2 py-0.5 rounded-full font-mono border transition-colors',
+                        active ? 'bg-prospex-cyan/10 text-prospex-cyan border-prospex-cyan/40' : `bg-prospex-bg ${tierColor} hover:text-prospex-text`)}>
+                      {d.tier === 'A' ? '🔥 ' : ''}{d.device_name}
+                    </button>
+                  );
+                })}
+                {deviceCatalog.length === 0 && (
+                  <span className="text-[10px] text-prospex-dim">Loading devices…</span>
+                )}
+              </div>
+              {(deviceFilter.length > 0 || deviceTierFilter) && deviceIdMask && deviceIdMask.size === 0 && (
+                <p className="text-[10px] text-amber-400 mt-2">
+                  No enriched leads matched. Tick some leads → click <strong>🔬 Enrich Devices</strong> to run detection on them first.
+                </p>
+              )}
+            </div>
           </div>
         )}
       </div>
