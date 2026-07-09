@@ -8,6 +8,7 @@ import {
   ExternalLink, ChevronDown, ChevronRight, Sparkles, Clock, Slack,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import PostEodPreviewModal from '@/components/PostEodPreviewModal';
 
 type Period = 'today' | 'week' | 'month' | 'all';
 type ChannelFilter = 'all' | 'instagram' | 'whatsapp' | 'sms';
@@ -127,7 +128,7 @@ export default function OutreachScorecardPage() {
   const [account, setAccount] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [expandedAccount, setExpandedAccount] = useState<string | null>(null);
-  const [postingSlack, setPostingSlack] = useState(false);
+  const [showEodPreview, setShowEodPreview] = useState(false);
   const [slackToast, setSlackToast] = useState<string | null>(null);
 
   const load = async () => {
@@ -160,23 +161,9 @@ export default function OutreachScorecardPage() {
     return m;
   }, [data]);
 
-  const postEodToSlack = async () => {
-    setPostingSlack(true);
-    setSlackToast(null);
-    try {
-      const res = await fetch('/api/outreach-eod', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'post_slack' }),
-      });
-      const json = await res.json();
-      setSlackToast(json.posted ? '✓ Posted to Slack' : `⚠ ${json.error || 'Slack post failed'}`);
-    } catch (e) {
-      setSlackToast(`⚠ ${e instanceof Error ? e.message : 'Slack post failed'}`);
-    } finally {
-      setPostingSlack(false);
-      setTimeout(() => setSlackToast(null), 4000);
-    }
+  const onEodPosted = () => {
+    setSlackToast('✓ Posted to Slack');
+    setTimeout(() => setSlackToast(null), 4000);
   };
 
   return (
@@ -192,8 +179,8 @@ export default function OutreachScorecardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={postEodToSlack} disabled={postingSlack} className="btn-ghost text-xs w-fit disabled:opacity-50" title="Push today's summary to the SDR Slack channel">
-            {postingSlack ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Slack className="w-3.5 h-3.5" />} Post EOD to Slack
+          <button onClick={() => setShowEodPreview(true)} className="btn-ghost text-xs w-fit" title="Preview and confirm the EOD digest before Slack">
+            <Slack className="w-3.5 h-3.5" /> Post EOD to Slack
           </button>
           <button onClick={load} className="btn-ghost text-xs w-fit">
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
@@ -482,6 +469,8 @@ export default function OutreachScorecardPage() {
           </div>
         </>
       ) : null}
+
+      <PostEodPreviewModal isOpen={showEodPreview} onClose={() => setShowEodPreview(false)} onPosted={onEodPosted} />
     </div>
   );
 }

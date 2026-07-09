@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Send, RefreshCw, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import PostEodPreviewModal from './PostEodPreviewModal';
 
 interface Summary {
   date: string;
@@ -15,8 +16,8 @@ interface Summary {
 export default function TodaysDmsStrip({ className }: { className?: string }) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
-  const [posting, setPosting] = useState(false);
   const [postedFlash, setPostedFlash] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -28,20 +29,10 @@ export default function TodaysDmsStrip({ className }: { className?: string }) {
   };
   useEffect(() => { load(); }, []);
 
-  const postSlack = async () => {
-    setPosting(true);
-    try {
-      const res = await fetch('/api/outreach-eod', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'post_slack' }),
-      });
-      const data = await res.json();
-      if (data.success && data.posted) {
-        setPostedFlash(true);
-        setTimeout(() => setPostedFlash(false), 2500);
-      }
-    } finally { setPosting(false); }
+  const onPosted = () => {
+    setPostedFlash(true);
+    setTimeout(() => setPostedFlash(false), 2500);
+    load();
   };
 
   if (loading) {
@@ -100,16 +91,18 @@ export default function TodaysDmsStrip({ className }: { className?: string }) {
           <button onClick={load} className="text-prospex-dim hover:text-prospex-text" title="Refresh" aria-label="Refresh">
             <RefreshCw className="w-3.5 h-3.5" />
           </button>
-          <button onClick={postSlack} disabled={posting || nothing}
+          <button onClick={() => setShowPreview(true)} disabled={nothing}
             className={cn('text-[10px] px-2 py-1 rounded border font-mono transition-colors disabled:opacity-40',
               postedFlash
                 ? 'bg-prospex-green/20 text-prospex-green border-prospex-green/40'
                 : 'bg-prospex-cyan/10 text-prospex-cyan border-prospex-cyan/30 hover:bg-prospex-cyan/20')}
-            title="Push today's digest to Slack now">
-            {posting ? <Loader2 className="w-3 h-3 animate-spin inline" /> : postedFlash ? '✓ Posted' : 'Post to Slack'}
+            title="Preview and confirm the EOD digest before Slack">
+            {postedFlash ? '✓ Posted' : 'Preview & Post'}
           </button>
         </div>
       </div>
+
+      <PostEodPreviewModal isOpen={showPreview} onClose={() => setShowPreview(false)} onPosted={onPosted} />
     </div>
   );
 }

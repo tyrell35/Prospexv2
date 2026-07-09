@@ -203,7 +203,7 @@ async function buildSummary(sinceISO?: string): Promise<Summary> {
   };
 }
 
-function formatSlack(s: Summary): { text: string; blocks: unknown[] } {
+function formatSlack(s: Summary, note?: string): { text: string; blocks: unknown[] } {
   const totalActions = s.totals.sent + s.totals.drafts + s.totals.blocked + s.totals.unsent;
   const dateLabel = new Date(s.date).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short' });
 
@@ -236,32 +236,32 @@ function formatSlack(s: Summary): { text: string; blocks: unknown[] } {
       }).join('\n')
     : null;
 
-  const textParts = [
-    header,
-    totalsLine,
-    replyTotalsLine,
-    `By channel: ${channelLine}`,
-    `*Per account:*\n${accountLines}`,
-  ];
+  const noteLine = note && note.trim() ? `📝 _${note.trim()}_` : null;
+
+  const textParts: string[] = [];
+  if (noteLine) textParts.push(noteLine);
+  textParts.push(header, totalsLine, replyTotalsLine, `By channel: ${channelLine}`, `*Per account:*\n${accountLines}`);
   if (winsBlock) textParts.push(winsBlock);
   const text = textParts.join('\n');
 
-  const blocks: unknown[] = [
+  const blocks: unknown[] = [];
+  if (noteLine) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: noteLine } });
+  blocks.push(
     { type: 'section', text: { type: 'mrkdwn', text: header } },
     { type: 'section', text: { type: 'mrkdwn', text: `${totalsLine}\n${replyTotalsLine}` } },
     { type: 'section', text: { type: 'mrkdwn', text: `*By channel:* ${channelLine}` } },
     { type: 'section', text: { type: 'mrkdwn', text: `*Per account:*\n${accountLines}` } },
-  ];
+  );
   if (winsBlock) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: winsBlock } });
   blocks.push({ type: 'divider' });
   return { text, blocks };
 }
 
-async function postToSlack(summary: Summary, channelOverride?: string): Promise<boolean> {
+async function postToSlack(summary: Summary, channelOverride?: string, note?: string): Promise<boolean> {
   const token = process.env.SLACK_BOT_TOKEN;
   if (!token) return false;
   const channel = channelOverride || process.env.SLACK_EOD_CHANNEL || process.env.SLACK_HUNT_CHANNEL || 'C0APFTS0686';
-  const { text, blocks } = formatSlack(summary);
+  const { text, blocks } = formatSlack(summary, note);
   const res = await fetch('https://slack.com/api/chat.postMessage', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
@@ -305,7 +305,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
   if (body.action === 'post_slack') {
     const summary = await buildSummary(body.since);
-    const posted = await postToSlack(summary, body.channel);
+    const posted = await postToSlack(summary, body.channel, body.note);
     return NextResponse.json({ success: true, posted, summary });
   }
   return NextResponse.json({ error: 'action required' }, { status: 400 });
