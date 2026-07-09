@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import {
-  X, Instagram, ExternalLink, Check, SkipForward, Ban, Loader2, ChevronLeft, ChevronRight,
-  Sparkles, AlertCircle, Flame, Copy, Rocket, User, MapPin, Trophy,
+  X, Instagram, MessageCircle, ExternalLink, Check, SkipForward, Ban, Loader2, ChevronLeft, ChevronRight,
+  Sparkles, AlertCircle, Flame, Copy, Rocket, User, MapPin, Trophy, Clock, Phone,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
@@ -63,12 +63,24 @@ interface QueueRow {
   outcome: 'pending' | 'sent' | 'skipped' | 'blocked';
 }
 
+type Channel = 'instagram' | 'whatsapp';
+
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   leads: Lead[];
+  channel: Channel;
   onCompleted?: (stats: { sent: number; skipped: number; blocked: number }) => void;
 }
+
+// Safe daily cap when cold-messaging from a single personal WhatsApp Web
+// session — WhatsApp's spam heuristics flag well-spaced velocity around
+// this level. Bump higher only for opted-in / existing-customer lists.
+const WHATSAPP_SAFE_DAILY_CAP = 50;
+// Minimum gap between sends (seconds) — surfaced as a timer + suggestion
+// rather than a hard block so the operator can override during a genuine
+// busy stretch.
+const WHATSAPP_MIN_GAP_SECONDS = 60;
 
 // ─── Personalisation ──────────────────────────────────────
 // Same rules as QuickMessage — keeps templates portable across surfaces.
@@ -108,8 +120,47 @@ function igDmLink(handle: string): string {
   return `https://ig.me/m/${handle}`;
 }
 
+// Normalize a phone to E.164 digits-only (no leading +). Strips spaces,
+// dashes, parens, dots. If it starts with a country code (like 44, 1, 61)
+// we keep it. If it starts with a UK 0 we swap it to 44. If it looks
+// short we return null — better a skipped lead than a broken wa.me link.
+function normalizeE164(phone: string | null | undefined, country: string | null | undefined): string | null {
+  if (!phone) return null;
+  let s = String(phone).replace(/[^\d+]/g, '');
+  if (s.startsWith('+')) s = s.slice(1);
+  // UK convention: 07... → 447...
+  if (s.startsWith('0') && (country?.toLowerCase().includes('kingdom') || country?.toLowerCase() === 'uk')) {
+    s = '44' + s.slice(1);
+  }
+  // US convention: 10-digit number without country code → prepend 1
+  if (s.length === 10 && (country?.toLowerCase().includes('united states') || country?.toLowerCase().includes('canada') || country?.toLowerCase() === 'us' || country?.toLowerCase() === 'usa')) {
+    s = '1' + s;
+  }
+  if (s.length < 8) return null;
+  return s;
+}
+
+// wa.me deep link with prefilled message. Opens WhatsApp Web (or the
+// mobile app) directly on the chat with the compose box pre-filled —
+// user just hits Send inside WhatsApp itself.
+function waDmLink(phoneE164: string, message: string): string {
+  return `https://wa.me/${phoneE164}?text=${encodeURIComponent(message)}`;
+}
+
+function leadContact(lead: Lead, channel: Channel): string | null {
+  if (channel === 'instagram') return extractIgHandle(lead);
+  if (channel === 'whatsapp') return normalizeE164(lead.phone, lead.country);
+  return null;
+}
+
 // ═══════════════════════════════════════════════════════
-export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }: Props) {
+export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCompleted }: Props) {
+  const isIg = channel === 'instagram';
+  const isWa = channel === 'whatsapp';
+  const channelMeta = isIg
+    ? { label: 'Instagram DM', icon: Instagram, color: 'text-pink-400', bg: 'from-pink-500/30 to-fuchsia-500/30', border: 'border-pink-500/40', dot: 'bg-pink-400' }
+    : { label: 'WhatsApp', icon: MessageCircle, color: 'text-green-400', bg: 'from-green-500/30 to-emerald-500/30', border: 'border-green-500/40', dot: 'bg-green-400' };
+
   const [templates, setTemplates] = useState<DbTemplate[]>([]);
   const [accounts, setAccounts] = useState<WarmAccount[]>([]);
   const [loading, setLoading] = useState(false);
@@ -121,8 +172,11 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [phase, setPhase] = useState<'setup' | 'run' | 'done'>('setup');
+  // WhatsApp-only: gap timer between sends (soft — displayed but not enforced)
+  const [waLastSentAt, setWaLastSentAt] = useState<number | null>(null);
+  const [waGapRemaining, setWaGapRemaining] = useState(0);
 
-  // ─── Load templates + warm accounts ─────────────────
+  // ─── Load templates + (IG only) warm accounts ─────────────────
   useEffect(() => {
     if (!isOpen) return;
     setPhase('setup');
@@ -131,37 +185,64 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
     setCurrentIndex(0);
     setSelectedTemplateId('');
     setCustomTemplate('');
+    setWaLastSentAt(null);
+    setWaGapRemaining(0);
     (async () => {
       setLoading(true);
-      const [tpl, acc] = await Promise.all([
-        supabase.from('conversation_templates').select('id, name, category, content, channel')
-          .eq('is_active', true).or('channel.eq.instagram,channel.eq.all').order('category'),
-        supabase.from('ig_accounts').select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at')
-          .eq('status', 'active').order('username'),
-      ]);
+      const channelFilter = isIg
+        ? 'channel.eq.instagram,channel.eq.all'
+        : 'channel.eq.whatsapp,channel.eq.all';
+      const tplP = supabase.from('conversation_templates').select('id, name, category, content, channel')
+        .eq('is_active', true).or(channelFilter).order('category');
+      const accP = isIg
+        ? supabase.from('ig_accounts').select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at')
+            .eq('status', 'active').order('username')
+        : Promise.resolve({ data: [] });
+      const [tpl, acc] = await Promise.all([tplP, accP]);
       setTemplates((tpl.data || []) as DbTemplate[]);
       setAccounts((acc.data || []) as WarmAccount[]);
       setLoading(false);
     })();
-  }, [isOpen]);
+  }, [isOpen, isIg]);
 
-  // ─── Filter leads with IG handles ──────────────────
+  // ─── WhatsApp: countdown timer between sends ─────────
+  useEffect(() => {
+    if (!isWa || !waLastSentAt) return;
+    const tick = () => {
+      const elapsed = (Date.now() - waLastSentAt) / 1000;
+      const remaining = Math.max(0, WHATSAPP_MIN_GAP_SECONDS - elapsed);
+      setWaGapRemaining(remaining);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [isWa, waLastSentAt]);
+
+  // ─── Filter leads with the required contact channel ──
   const eligibleLeads = useMemo(
-    () => leads.filter(l => !!extractIgHandle(l)),
-    [leads]
+    () => leads.filter(l => leadContact(l, channel) !== null),
+    [leads, channel]
   );
   const skippedNoHandle = leads.length - eligibleLeads.length;
 
-  // ─── Compute effective remaining capacity per account ─
+  // ─── Compute effective remaining capacity ──────────
+  // IG: sum of remaining KPI target across active warm accounts (respects
+  //     warmup ladder — 5/10/20/30 per account depending on days in ramp).
+  // WA: single personal WhatsApp Web — cap at WHATSAPP_SAFE_DAILY_CAP.
+  //     We can't read what's been sent today outside Prospex, so the cap
+  //     is a per-session limit for this modal opening.
   const accountCapacity = useMemo(() => {
+    if (!isIg) return [];
     return accounts.map(a => {
       const w = computeWarmupState(a);
       const used = a.daily_sent_today || 0;
       const remaining = Math.max(0, w.effective_target - used);
       return { username: a.username, remaining, stage: w.stage, target: w.effective_target };
     }).filter(a => a.stage !== 'new' && a.stage !== 'paused' && a.remaining > 0);
-  }, [accounts]);
-  const totalCapacity = accountCapacity.reduce((s, a) => s + a.remaining, 0);
+  }, [accounts, isIg]);
+  const totalCapacity = isIg
+    ? accountCapacity.reduce((s, a) => s + a.remaining, 0)
+    : WHATSAPP_SAFE_DAILY_CAP;
 
   // ─── Build the queue: round-robin across accounts, respecting caps ─
   const startBulkSend = () => {
@@ -173,40 +254,50 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
       setError('Pick a template first, or write a custom message.');
       return;
     }
-    if (accountCapacity.length === 0) {
+    if (isIg && accountCapacity.length === 0) {
       setError('No warm accounts have capacity left today. Start a warmup or wait for daily reset.');
       return;
     }
     if (eligibleLeads.length === 0) {
-      setError('None of the selected leads have an Instagram handle.');
+      setError(isIg ? 'None of the selected leads have an Instagram handle.' : 'None of the selected leads have a valid phone number.');
       return;
     }
 
-    // Round-robin — track how many each account has taken so we don't
-    // overshoot its remaining KPI target.
-    const takes = new Map<string, number>();
     const rows: QueueRow[] = [];
-    let cursor = 0;
-    for (const lead of eligibleLeads) {
-      // Try up to accountCapacity.length rotations to find an available account
-      let assigned: string | null = null;
-      for (let i = 0; i < accountCapacity.length; i++) {
-        const acc = accountCapacity[(cursor + i) % accountCapacity.length];
-        const taken = takes.get(acc.username) || 0;
-        if (taken < acc.remaining) {
-          assigned = acc.username;
-          takes.set(acc.username, taken + 1);
-          cursor = (cursor + i + 1) % accountCapacity.length;
-          break;
+
+    if (isIg) {
+      // Round-robin — track how many each account has taken so we don't
+      // overshoot its remaining KPI target.
+      const takes = new Map<string, number>();
+      let cursor = 0;
+      for (const lead of eligibleLeads) {
+        let assigned: string | null = null;
+        for (let i = 0; i < accountCapacity.length; i++) {
+          const acc = accountCapacity[(cursor + i) % accountCapacity.length];
+          const taken = takes.get(acc.username) || 0;
+          if (taken < acc.remaining) {
+            assigned = acc.username;
+            takes.set(acc.username, taken + 1);
+            cursor = (cursor + i + 1) % accountCapacity.length;
+            break;
+          }
         }
+        if (!assigned) break; // capacity exhausted — stop assigning
+        rows.push({
+          lead, sender_account: assigned,
+          message: personalize(template.content, lead), outcome: 'pending',
+        });
       }
-      if (!assigned) break; // capacity exhausted — stop assigning
-      rows.push({
-        lead,
-        sender_account: assigned,
-        message: personalize(template.content, lead),
-        outcome: 'pending',
-      });
+    } else {
+      // WhatsApp: single sender (user's personal WA), cap at safe daily.
+      const cap = Math.min(eligibleLeads.length, WHATSAPP_SAFE_DAILY_CAP);
+      for (let i = 0; i < cap; i++) {
+        const lead = eligibleLeads[i];
+        rows.push({
+          lead, sender_account: 'personal_whatsapp',
+          message: personalize(template.content, lead), outcome: 'pending',
+        });
+      }
     }
 
     if (rows.length === 0) {
@@ -220,17 +311,24 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
 
   // ─── Current lead ─────────────────────────────
   const current = queue[currentIndex];
-  const currentHandle = current ? extractIgHandle(current.lead) : null;
+  const currentContact = current ? leadContact(current.lead, channel) : null;
 
-  // ─── Open in Instagram + copy to clipboard ─────
-  const openInInstagram = async () => {
-    if (!current || !currentHandle) return;
-    try {
-      await navigator.clipboard.writeText(current.message);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch { /* ignore — some browsers block clipboard w/o gesture, that's fine */ }
-    window.open(igDmLink(currentHandle), '_blank', 'noopener,noreferrer');
+  // ─── Open in the channel's native app ─────────
+  // IG: opens ig.me/m/<handle> — user has to paste the message
+  // WA: opens wa.me/<phone>?text=<encoded> — message prefills automatically
+  const openInChannel = async () => {
+    if (!current || !currentContact) return;
+    if (isIg) {
+      try {
+        await navigator.clipboard.writeText(current.message);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch { /* clipboard blocked without gesture — no-op, IG still opens */ }
+      window.open(igDmLink(currentContact), '_blank', 'noopener,noreferrer');
+    } else {
+      // WhatsApp: message auto-prefills via URL, no clipboard needed
+      window.open(waDmLink(currentContact, current.message), '_blank', 'noopener,noreferrer');
+    }
   };
 
   // ─── Log outcome + advance ────────────────────
@@ -248,17 +346,24 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
           body: JSON.stringify({
             action: 'log_outreach',
             lead_id: current.lead.id,
-            channel: 'instagram',
+            channel,
             stage: 'cold_open',
             message_sent: current.message,
             sent_by: 'manual',
-            sender_account: current.sender_account,
+            // WA: no per-account counter to bump; log null so it doesn't
+            // show up misleadingly as an @ig_account in the scorecard.
+            sender_account: isIg ? current.sender_account : null,
             outcome,
             confirmed: outcome === 'sent',
           }),
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Log failed');
+      }
+
+      // WA-only: reset the pacing timer so the UI can nudge the user
+      if (isWa && outcome === 'sent') {
+        setWaLastSentAt(Date.now());
       }
 
       // Update local queue + advance
@@ -287,7 +392,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
     if (!isOpen || phase !== 'run') return;
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
-      if (e.key === 'o' || e.key === 'O') { e.preventDefault(); openInInstagram(); }
+      if (e.key === 'o' || e.key === 'O') { e.preventDefault(); openInChannel(); }
       else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); logAndAdvance('sent'); }
       else if (e.key === 's' || e.key === 'S') { e.preventDefault(); logAndAdvance('skipped'); }
       else if (e.key === 'b' || e.key === 'B') { e.preventDefault(); logAndAdvance('blocked'); }
@@ -305,17 +410,20 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
 
   return (
     <div className="fixed inset-0 bg-black/70 z-[200] flex items-center justify-center p-4" onClick={onClose}>
-      <div ref={containerRef} className="card bg-prospex-surface max-w-3xl w-full max-h-[92vh] flex flex-col border-pink-500/40" onClick={e => e.stopPropagation()}>
+      <div ref={containerRef} className={cn('card bg-prospex-surface max-w-3xl w-full max-h-[92vh] flex flex-col', channelMeta.border)} onClick={e => e.stopPropagation()}>
 
         {/* Header */}
         <div className="p-4 border-b border-prospex-border flex items-center justify-between flex-shrink-0">
           <div className="flex items-center gap-2">
-            <Rocket className="w-5 h-5 text-pink-400" />
+            <Rocket className={cn('w-5 h-5', channelMeta.color)} />
             <div>
-              <h2 className="text-sm font-mono font-bold text-prospex-text">Bulk IG DM Sender</h2>
+              <h2 className="text-sm font-mono font-bold text-prospex-text">Fast {channelMeta.label} Sender</h2>
               <p className="text-[10px] text-prospex-dim">
-                {phase === 'setup' && `${eligibleLeads.length} of ${leads.length} leads have an IG handle · ${totalCapacity} sends available today across ${accountCapacity.length} warm account${accountCapacity.length === 1 ? '' : 's'}`}
-                {phase === 'run' && `Lead ${currentIndex + 1} of ${queue.length} · Space=Sent · S=Skip · B=Blocked · O=Open IG · ←/→=Nav`}
+                {phase === 'setup' && (isIg
+                  ? `${eligibleLeads.length} of ${leads.length} leads have an IG handle · ${totalCapacity} sends available today across ${accountCapacity.length} warm account${accountCapacity.length === 1 ? '' : 's'}`
+                  : `${eligibleLeads.length} of ${leads.length} leads have a valid phone · safe daily cap ${WHATSAPP_SAFE_DAILY_CAP}/day from personal WhatsApp Web`
+                )}
+                {phase === 'run' && `Lead ${currentIndex + 1} of ${queue.length} · Space=Sent · S=Skip · B=Blocked · O=Open ${isIg ? 'IG' : 'WA'} · ←/→=Nav`}
                 {phase === 'done' && 'Session complete'}
               </p>
             </div>
@@ -335,34 +443,48 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
               {skippedNoHandle > 0 && (
                 <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded text-[11px] text-amber-400">
                   <AlertCircle className="w-3 h-3 inline mr-1" />
-                  {skippedNoHandle} lead{skippedNoHandle === 1 ? '' : 's'} without an Instagram handle will be skipped. Add handles or enrich to include them.
+                  {skippedNoHandle} lead{skippedNoHandle === 1 ? '' : 's'} without a {isIg ? 'valid IG handle' : 'valid phone number'} will be skipped.
                 </div>
               )}
-              {totalCapacity < eligibleLeads.length && totalCapacity > 0 && (
+              {isIg && totalCapacity < eligibleLeads.length && totalCapacity > 0 && (
                 <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded text-[11px] text-amber-400">
                   <Flame className="w-3 h-3 inline mr-1" />
                   Only {totalCapacity} sends available today across your warm accounts — the queue will cap at {totalCapacity}. Add more warm accounts to increase daily throughput.
                 </div>
               )}
-              {totalCapacity === 0 && (
+              {isIg && totalCapacity === 0 && (
                 <div className="p-3 bg-prospex-red/10 border border-prospex-red/30 rounded text-[11px] text-prospex-red">
                   <AlertCircle className="w-3 h-3 inline mr-1" />
                   No warm accounts with capacity today. Either start a warmup, wait for the daily reset, or graduate an in-warmup account.
                 </div>
               )}
+              {isWa && (
+                <div className="p-2.5 bg-green-500/10 border border-green-500/30 rounded text-[11px] text-green-400 space-y-1">
+                  <p><Clock className="w-3 h-3 inline mr-1" /><strong>WhatsApp pacing:</strong> aim for ~60-90 seconds between cold sends. WhatsApp Web flags velocity spikes even for manual sends.</p>
+                  <p className="text-green-300/80">Realistic safe cap from a personal WhatsApp: ~{WHATSAPP_SAFE_DAILY_CAP}/day for cold outreach. Higher volumes OK for opted-in contacts.</p>
+                </div>
+              )}
 
-              {/* Account capacity breakdown */}
-              {accountCapacity.length > 0 && (
+              {/* Account capacity breakdown (IG only) */}
+              {isIg && accountCapacity.length > 0 && (
                 <div>
                   <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5">Sending from</p>
                   <div className="flex flex-wrap gap-1.5">
                     {accountCapacity.map(a => (
                       <span key={a.username} className="text-[10px] font-mono bg-prospex-bg border border-prospex-border rounded px-2 py-0.5">
-                        @{a.username} · <span className="text-pink-400 font-bold">{a.remaining}</span> left
+                        @{a.username} · <span className={cn('font-bold', channelMeta.color)}>{a.remaining}</span> left
                         {a.stage === 'warming' && <span className="ml-1 text-amber-400">🔥warming</span>}
                       </span>
                     ))}
                   </div>
+                </div>
+              )}
+              {isWa && (
+                <div>
+                  <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5">Sending from</p>
+                  <span className="inline-flex items-center gap-1.5 text-[10px] font-mono bg-prospex-bg border border-green-500/30 rounded px-2 py-0.5 text-green-400">
+                    <Phone className="w-2.5 h-2.5" /> Personal WhatsApp Web
+                  </span>
                 </div>
               )}
 
@@ -410,8 +532,16 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
             <>
               {/* Progress bar */}
               <div className="w-full h-1.5 bg-prospex-bg rounded-full overflow-hidden">
-                <div className="h-full bg-pink-400 transition-all" style={{ width: `${((currentIndex + 1) / queue.length) * 100}%` }} />
+                <div className={cn('h-full transition-all', channelMeta.dot)} style={{ width: `${((currentIndex + 1) / queue.length) * 100}%` }} />
               </div>
+
+              {/* WA pacing reminder */}
+              {isWa && waGapRemaining > 0 && (
+                <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded text-[11px] text-amber-400 flex items-center gap-2">
+                  <Clock className="w-3 h-3" />
+                  <span>Wait {Math.ceil(waGapRemaining)}s before next send — protects your WhatsApp from velocity flags.</span>
+                </div>
+              )}
 
               {/* Lead card */}
               <div className="p-3 bg-prospex-bg rounded-lg border border-prospex-border">
@@ -421,15 +551,18 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
                     <div className="flex items-center gap-2 flex-wrap mt-0.5">
                       <span className="text-[10px] text-prospex-dim flex items-center gap-1"><MapPin className="w-2.5 h-2.5" /> {current.lead.city || '—'}</span>
                       {current.lead.niche && <span className="text-[10px] text-prospex-dim">· {current.lead.niche}</span>}
-                      <span className="text-[10px] text-pink-400 flex items-center gap-1 font-mono">
-                        <Instagram className="w-2.5 h-2.5" /> @{currentHandle}
+                      <span className={cn('text-[10px] flex items-center gap-1 font-mono', channelMeta.color)}>
+                        {isIg ? <Instagram className="w-2.5 h-2.5" /> : <MessageCircle className="w-2.5 h-2.5" />}
+                        {isIg ? `@${currentContact}` : `+${currentContact}`}
                       </span>
                     </div>
                   </div>
-                  <div className="flex-shrink-0 text-right">
-                    <span className="text-[9px] font-mono text-prospex-dim">from</span>
-                    <p className="text-[11px] font-mono text-pink-400">@{current.sender_account}</p>
-                  </div>
+                  {isIg && (
+                    <div className="flex-shrink-0 text-right">
+                      <span className="text-[9px] font-mono text-prospex-dim">from</span>
+                      <p className={cn('text-[11px] font-mono', channelMeta.color)}>@{current.sender_account}</p>
+                    </div>
+                  )}
                 </div>
 
                 {/* Message */}
@@ -443,8 +576,15 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
 
               {/* Action buttons */}
               <div className="flex flex-col gap-2">
-                <button onClick={openInInstagram} className="w-full flex items-center justify-center gap-2 bg-pink-500/20 text-pink-400 border border-pink-500/40 hover:bg-pink-500/30 py-3 rounded-lg font-mono text-sm transition-colors">
-                  {copied ? <><Check className="w-4 h-4" /> Copied · IG opened → paste + send</> : <><Instagram className="w-4 h-4" /> Open in Instagram (O)</>}
+                <button onClick={openInChannel} className={cn(
+                  'w-full flex items-center justify-center gap-2 border py-3 rounded-lg font-mono text-sm transition-colors',
+                  isIg ? 'bg-pink-500/20 text-pink-400 border-pink-500/40 hover:bg-pink-500/30'
+                       : 'bg-green-500/20 text-green-400 border-green-500/40 hover:bg-green-500/30'
+                )}>
+                  {isIg
+                    ? (copied ? <><Check className="w-4 h-4" /> Copied · IG opened → paste + send</> : <><Instagram className="w-4 h-4" /> Open in Instagram (O)</>)
+                    : <><MessageCircle className="w-4 h-4" /> Open in WhatsApp Web (O) · message auto-prefills</>
+                  }
                 </button>
 
                 <div className="grid grid-cols-3 gap-2">
@@ -521,13 +661,15 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, onCompleted }:
         <div className="p-3 border-t border-prospex-border flex items-center justify-between flex-shrink-0">
           <div className="text-[10px] text-prospex-dim flex items-center gap-1.5">
             <Sparkles className="w-2.5 h-2.5" />
-            {phase === 'setup' && 'You still tap "Send" inside Instagram itself — keeps accounts safe.'}
-            {phase === 'run' && 'Keyboard: Space=Sent · S=Skip · B=Blocked · O=Open IG'}
+            {phase === 'setup' && (isIg
+              ? 'You still tap "Send" inside Instagram itself — keeps accounts safe.'
+              : 'You still tap "Send" inside WhatsApp Web — keeps your number safe.')}
+            {phase === 'run' && `Keyboard: Space=Sent · S=Skip · B=Blocked · O=Open ${isIg ? 'IG' : 'WA'}`}
             {phase === 'done' && 'Nice work.'}
           </div>
           <div className="flex items-center gap-2">
             {phase === 'setup' && (
-              <button onClick={startBulkSend} disabled={loading || !selectedTemplateId || (selectedTemplateId === 'custom' && !customTemplate.trim()) || totalCapacity === 0}
+              <button onClick={startBulkSend} disabled={loading || !selectedTemplateId || (selectedTemplateId === 'custom' && !customTemplate.trim()) || (isIg && totalCapacity === 0)}
                 className="btn-primary text-xs disabled:opacity-50 flex items-center gap-1.5">
                 <Rocket className="w-3.5 h-3.5" /> Start · queue {Math.min(eligibleLeads.length, totalCapacity)} leads
               </button>

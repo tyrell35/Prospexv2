@@ -66,7 +66,7 @@ export default function LeadsPage() {
   const [msgChannel, setMsgChannel] = useState<'whatsapp' | 'instagram'>('whatsapp');
   const [msgLead, setMsgLead] = useState<Lead | null>(null);
   const [blasterChannel, setBlasterChannel] = useState<null | 'whatsapp' | 'instagram'>(null);
-  const [fastBlastOpen, setFastBlastOpen] = useState(false);
+  const [fastBlastChannel, setFastBlastChannel] = useState<null | 'instagram' | 'whatsapp'>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [enriching, setEnriching] = useState(false);
 
@@ -284,7 +284,8 @@ export default function LeadsPage() {
             </button>
             <button onClick={() => setBlasterChannel('whatsapp')} className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30" title="Blast WhatsApp messages"><Zap className="w-3.5 h-3.5" /> Blast WA ({selectedIds.size})</button>
             <button onClick={() => setBlasterChannel('instagram')} className="btn text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30" title="Blast Instagram DMs · confirm each send"><Zap className="w-3.5 h-3.5" /> Blast IG ({selectedIds.size})</button>
-            <button onClick={() => setFastBlastOpen(true)} className="btn text-xs bg-gradient-to-r from-pink-500/30 to-fuchsia-500/30 text-pink-300 border border-pink-500/50 hover:from-pink-500/40 hover:to-fuchsia-500/40" title="Fast Blast · round-robin across warm accounts, one-tap send, keyboard shortcuts">🚀 Fast IG ({selectedIds.size})</button>
+            <button onClick={() => setFastBlastChannel('instagram')} className="btn text-xs bg-gradient-to-r from-pink-500/30 to-fuchsia-500/30 text-pink-300 border border-pink-500/50 hover:from-pink-500/40 hover:to-fuchsia-500/40" title="Fast Blast IG · round-robin across warm accounts, one-tap send, keyboard shortcuts">🚀 Fast IG ({selectedIds.size})</button>
+            <button onClick={() => setFastBlastChannel('whatsapp')} className="btn text-xs bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-300 border border-green-500/50 hover:from-green-500/40 hover:to-emerald-500/40" title="Fast Blast WhatsApp · opens wa.me deep link with prefilled message per lead"><MessageCircle className="w-3.5 h-3.5" /> Fast WA ({selectedIds.size})</button>
             <button onClick={handleExportCSV} className="btn-primary text-xs"><Download className="w-3.5 h-3.5" /> Export ({selectedIds.size})</button>
             <button onClick={handleBulkDelete} className="btn-danger text-xs"><Trash2 className="w-3.5 h-3.5" /> Delete ({selectedIds.size})</button>
           </>)}
@@ -484,10 +485,11 @@ export default function LeadsPage() {
         leads={leads.filter(l => selectedIds.has(l.id))}
       />
 
-      {/* Fast IG Blast — round-robin + warmup-aware + one-tap */}
+      {/* Fast Blast — IG (round-robin + warmup-aware) or WhatsApp Web (wa.me deep link) */}
       <BulkDmSendModal
-        isOpen={fastBlastOpen}
-        onClose={() => setFastBlastOpen(false)}
+        isOpen={fastBlastChannel !== null}
+        onClose={() => setFastBlastChannel(null)}
+        channel={fastBlastChannel || 'instagram'}
         leads={leads.filter(l => selectedIds.has(l.id))}
         onCompleted={() => { fetchLeads(); }}
       />
