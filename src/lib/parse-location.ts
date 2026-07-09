@@ -41,28 +41,40 @@ const CA_LAST_SEGMENT_LONG_RE = /,\s*[A-Za-z\s]+\s+[A-Z][0-9][A-Z]\s?[0-9][A-Z][
  * @param fallback What to return if we can't derive anything sensible
  *                  (usually the scraper's search term or null)
  */
+// Title-case a city string, preserving common patterns like "St Ives",
+// "Newcastle-under-Lyme", "King's Lynn" that a naive INITCAP would mangle.
+// If the input is already mixed-case (e.g. "iPhone"-style), leave it alone.
+function normalizeCityCase(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return trimmed;
+  // If the input has any uppercase letter already, trust the source
+  // (Google Places usually returns "Bournemouth" — only leave it if it
+  // looks intentional).
+  if (/[A-Z]/.test(trimmed) && trimmed !== trimmed.toUpperCase()) return trimmed;
+  // All-lowercase or all-uppercase → title-case each word, split on space or hyphen
+  return trimmed.toLowerCase().replace(/(^|[\s\-'])([a-z])/g, (_m, sep, ch) => sep + ch.toUpperCase());
+}
+
 export function parseCityFromAddress(address: string | null | undefined, fallback: string | null = null): string | null {
-  if (!address || !address.trim()) return fallback;
+  const rawFallback = fallback ? normalizeCityCase(fallback) : fallback;
+  if (!address || !address.trim()) return rawFallback;
 
   const clean = address.replace(COUNTRY_SUFFIX_RE, '').trim();
   if (!clean.includes(',')) {
-    // Single-segment address ("Just Weymouth DT4 9XP") — strip UK postcode
     const stripped = clean.replace(UK_POSTCODE_TAIL_RE, '').trim();
-    return stripped || fallback;
+    return stripped ? normalizeCityCase(stripped) : rawFallback;
   }
 
   const parts = clean.split(',').map(s => s.trim()).filter(Boolean);
-  if (parts.length === 0) return fallback;
+  if (parts.length === 0) return rawFallback;
 
-  // US or Canada with province+postcode as last segment → second-to-last is city
   if (US_LAST_SEGMENT_RE.test(clean) || CA_LAST_SEGMENT_SHORT_RE.test(clean) || CA_LAST_SEGMENT_LONG_RE.test(clean)) {
-    if (parts.length >= 2) return parts[parts.length - 2] || fallback;
+    if (parts.length >= 2) return normalizeCityCase(parts[parts.length - 2]) || rawFallback;
   }
 
-  // UK style — last segment minus postcode
   const last = parts[parts.length - 1];
   const stripped = last.replace(UK_POSTCODE_TAIL_RE, '').trim();
-  return stripped || fallback;
+  return stripped ? normalizeCityCase(stripped) : rawFallback;
 }
 
 // ═══════════════════════════════════════════════════════
