@@ -8,6 +8,7 @@ import { cn, getScoreColor, getSourceConfig, getPriorityConfig, formatDate } fro
 import type { Lead, TableSort, TableFilter } from '@/lib/types';
 import QuickMessage from '@/components/QuickMessage';
 import OutreachBlaster from '@/components/OutreachBlaster';
+import BulkDmSendModal from '@/components/BulkDmSendModal';
 import TodaysDmsStrip from '@/components/TodaysDmsStrip';
 import ExportLeadsModal from '@/components/ExportLeadsModal';
 import { Zap } from 'lucide-react';
@@ -65,6 +66,7 @@ export default function LeadsPage() {
   const [msgChannel, setMsgChannel] = useState<'whatsapp' | 'instagram'>('whatsapp');
   const [msgLead, setMsgLead] = useState<Lead | null>(null);
   const [blasterChannel, setBlasterChannel] = useState<null | 'whatsapp' | 'instagram'>(null);
+  const [fastBlastOpen, setFastBlastOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [enriching, setEnriching] = useState(false);
 
@@ -281,7 +283,8 @@ export default function LeadsPage() {
               {enriching ? '⏳' : '🔬'} Enrich Devices ({selectedIds.size})
             </button>
             <button onClick={() => setBlasterChannel('whatsapp')} className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30" title="Blast WhatsApp messages"><Zap className="w-3.5 h-3.5" /> Blast WA ({selectedIds.size})</button>
-            <button onClick={() => setBlasterChannel('instagram')} className="btn text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30" title="Blast Instagram DMs"><Zap className="w-3.5 h-3.5" /> Blast IG ({selectedIds.size})</button>
+            <button onClick={() => setBlasterChannel('instagram')} className="btn text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30" title="Blast Instagram DMs · confirm each send"><Zap className="w-3.5 h-3.5" /> Blast IG ({selectedIds.size})</button>
+            <button onClick={() => setFastBlastOpen(true)} className="btn text-xs bg-gradient-to-r from-pink-500/30 to-fuchsia-500/30 text-pink-300 border border-pink-500/50 hover:from-pink-500/40 hover:to-fuchsia-500/40" title="Fast Blast · round-robin across warm accounts, one-tap send, keyboard shortcuts">🚀 Fast IG ({selectedIds.size})</button>
             <button onClick={handleExportCSV} className="btn-primary text-xs"><Download className="w-3.5 h-3.5" /> Export ({selectedIds.size})</button>
             <button onClick={handleBulkDelete} className="btn-danger text-xs"><Trash2 className="w-3.5 h-3.5" /> Delete ({selectedIds.size})</button>
           </>)}
@@ -473,12 +476,20 @@ export default function LeadsPage() {
         />
       )}
 
-      {/* Outreach Blaster Modal */}
+      {/* Outreach Blaster Modal (confirm-per-send) */}
       <OutreachBlaster
         isOpen={blasterChannel !== null}
         onClose={() => setBlasterChannel(null)}
         channel={blasterChannel || 'whatsapp'}
         leads={leads.filter(l => selectedIds.has(l.id))}
+      />
+
+      {/* Fast IG Blast — round-robin + warmup-aware + one-tap */}
+      <BulkDmSendModal
+        isOpen={fastBlastOpen}
+        onClose={() => setFastBlastOpen(false)}
+        leads={leads.filter(l => selectedIds.has(l.id))}
+        onCompleted={() => { fetchLeads(); }}
       />
 
       {/* Export Modal */}
