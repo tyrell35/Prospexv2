@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, Fragment } from 'react';
 import Link from 'next/link';
 import {
   Trophy, Send, MessageCircle, ThumbsUp, ThumbsDown, Meh, CalendarCheck,
-  Loader2, RefreshCw, TrendingUp, TrendingDown, Instagram, Phone, Filter,
-  ExternalLink,
+  Loader2, RefreshCw, TrendingUp, TrendingDown, Instagram, Filter,
+  ExternalLink, ChevronDown, ChevronRight, Sparkles, Clock, Slack,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -22,10 +22,48 @@ interface Scorecard {
     bookings: number;
     reply_rate: number; positive_rate: number; booking_rate: number; positive_to_booking: number;
   };
-  by_account: Array<{ account: string; sent: number; daily_sent_today: number; daily_limit: number; total_sent: number; total_replies: number }>;
+  by_account: Array<{
+    account: string; sent: number; daily_sent_today: number; daily_limit: number;
+    total_sent: number; total_replies: number;
+    window_replies: number; window_positive: number; window_negative: number; window_neutral: number;
+  }>;
   by_day: Array<{ date: string; sent: number }>;
   by_channel: Array<{ channel: string; sent: number }>;
   by_stage: Array<{ stage: string; sent: number }>;
+  positive_reply_log: Array<{
+    lead_id: string; lead_business: string; sender_account: string; channel: string;
+    sentiment: 'positive'; sent_at: string; responded_at: string; message_sent: string;
+  }>;
+  message_log: Array<{
+    lead_id: string | null; lead_business: string; sender_account: string; channel: string;
+    stage: string; message_sent: string; created_at: string;
+    reply_status: 'positive' | 'negative' | 'neutral' | 'awaiting'; booked: boolean;
+  }>;
+}
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+function ReplyChip({ status }: { status: 'positive' | 'negative' | 'neutral' | 'awaiting' }) {
+  const cfg = {
+    positive: { icon: '🟢', label: 'positive', cls: 'text-prospex-green border-prospex-green/40' },
+    negative: { icon: '🔴', label: 'negative', cls: 'text-prospex-red border-prospex-red/40' },
+    neutral:  { icon: '🟡', label: 'neutral',  cls: 'text-amber-400 border-amber-500/40' },
+    awaiting: { icon: '⏳', label: 'awaiting', cls: 'text-prospex-dim border-prospex-border' },
+  }[status];
+  return (
+    <span className={cn('text-[9px] font-mono px-1.5 py-0.5 rounded border', cfg.cls)}>
+      {cfg.icon} {cfg.label}
+    </span>
+  );
 }
 
 // ─── Small building blocks ──────────────────────────────
@@ -87,6 +125,9 @@ export default function OutreachScorecardPage() {
   const [channel, setChannel] = useState<ChannelFilter>('all');
   const [account, setAccount] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+  const [expandedAccount, setExpandedAccount] = useState<string | null>(null);
+  const [postingSlack, setPostingSlack] = useState(false);
+  const [slackToast, setSlackToast] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -107,6 +148,36 @@ export default function OutreachScorecardPage() {
 
   const daySeriesMax = useMemo(() => data ? Math.max(1, ...data.by_day.map(d => d.sent)) : 1, [data]);
 
+  const messagesByAccount = useMemo(() => {
+    const m = new Map<string, Scorecard['message_log']>();
+    if (!data) return m;
+    for (const msg of data.message_log) {
+      const bucket = m.get(msg.sender_account) || [];
+      bucket.push(msg);
+      m.set(msg.sender_account, bucket);
+    }
+    return m;
+  }, [data]);
+
+  const postEodToSlack = async () => {
+    setPostingSlack(true);
+    setSlackToast(null);
+    try {
+      const res = await fetch('/api/outreach-eod', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'post_slack' }),
+      });
+      const json = await res.json();
+      setSlackToast(json.posted ? '✓ Posted to Slack' : `⚠ ${json.error || 'Slack post failed'}`);
+    } catch (e) {
+      setSlackToast(`⚠ ${e instanceof Error ? e.message : 'Slack post failed'}`);
+    } finally {
+      setPostingSlack(false);
+      setTimeout(() => setSlackToast(null), 4000);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto space-y-4">
       {/* Header */}
@@ -119,10 +190,19 @@ export default function OutreachScorecardPage() {
             The one page that answers: how many sends, how many replies, how many bookings — and per account.
           </p>
         </div>
-        <button onClick={load} className="btn-ghost text-xs w-fit">
-          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={postEodToSlack} disabled={postingSlack} className="btn-ghost text-xs w-fit disabled:opacity-50" title="Push today's summary to the SDR Slack channel">
+            {postingSlack ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Slack className="w-3.5 h-3.5" />} Post EOD to Slack
+          </button>
+          <button onClick={load} className="btn-ghost text-xs w-fit">
+            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
+          </button>
+        </div>
       </div>
+
+      {slackToast && (
+        <div className="card p-2 text-xs text-prospex-cyan border-prospex-cyan/40">{slackToast}</div>
+      )}
 
       {/* Filter bar */}
       <div className="card p-3 flex flex-wrap items-center gap-2">
@@ -169,6 +249,40 @@ export default function OutreachScorecardPage() {
             <KpiCard label="Bookings" value={data.funnel.bookings} sub={`${data.funnel.booking_rate}% of sends`} icon={CalendarCheck} tone="green" />
           </div>
 
+          {/* Positive Replies callout — the ones you want to close today */}
+          {data.positive_reply_log.length > 0 && (
+            <div className="card p-4 border-prospex-green/40">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-xs font-mono uppercase tracking-wider text-prospex-green flex items-center gap-2">
+                  <Sparkles className="w-3.5 h-3.5" /> Positive Replies · {data.positive_reply_log.length}
+                </h2>
+                <span className="text-[9px] text-prospex-dim">Warm leads with an attributable message — this is your close list.</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {data.positive_reply_log.map(r => (
+                  <Link key={`${r.lead_id}-${r.responded_at}`} href={`/leads/${r.lead_id}`}
+                    className="block bg-prospex-bg/60 border border-prospex-green/20 rounded-lg p-2.5 hover:border-prospex-green/50 transition-colors">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-mono text-prospex-text font-bold truncate">{r.lead_business}</span>
+                      <span className="text-[9px] font-mono text-prospex-dim flex items-center gap-1 flex-shrink-0 ml-2">
+                        <Clock className="w-2.5 h-2.5" /> {timeAgo(r.responded_at)}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-prospex-muted mb-1">
+                      {r.channel === 'instagram' ? '📷' : r.channel === 'whatsapp' ? '💬' : '📱'}{' '}
+                      from <span className="text-prospex-cyan font-mono">@{r.sender_account}</span>
+                    </div>
+                    {r.message_sent && (
+                      <p className="text-[10px] text-prospex-dim italic line-clamp-2">
+                        &ldquo;{r.message_sent.slice(0, 140)}{r.message_sent.length > 140 ? '…' : ''}&rdquo;
+                      </p>
+                    )}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Row 2: secondary */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <KpiCard label="Drafts" value={data.totals.drafts} sub="written but not sent" icon={Send} tone="amber" />
@@ -200,35 +314,92 @@ export default function OutreachScorecardPage() {
               <p className="text-xs text-prospex-dim py-4 text-center">No per-account sends logged in this window yet.</p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full text-xs min-w-[560px]">
+                <table className="w-full text-xs min-w-[820px]">
                   <thead>
                     <tr className="table-header">
+                      <th className="text-left px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase w-6"></th>
                       <th className="text-left px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Account</th>
-                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Sent (window)</th>
-                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Today used / limit</th>
-                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">All-time sent</th>
-                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">All-time replies</th>
+                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Sent</th>
+                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Replies</th>
+                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">🟢 Pos</th>
+                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">🔴 Neg</th>
+                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Reply rate</th>
+                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Today / limit</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.by_account.map(a => {
                       const usePct = a.daily_limit > 0 ? Math.round((a.daily_sent_today / a.daily_limit) * 100) : 0;
                       const barColor = usePct >= 100 ? 'bg-prospex-red' : usePct >= 80 ? 'bg-amber-400' : 'bg-prospex-cyan';
+                      const replyRate = a.sent > 0 ? Math.round((a.window_replies / a.sent) * 1000) / 10 : 0;
+                      const isExpanded = expandedAccount === a.account;
+                      const accountMessages = messagesByAccount.get(a.account) || [];
                       return (
-                        <tr key={a.account} className="table-row">
-                          <td className="px-3 py-2 text-prospex-text font-mono">@{a.account}</td>
-                          <td className="px-3 py-2 text-right font-mono text-prospex-cyan font-bold">{a.sent}</td>
-                          <td className="px-3 py-2 text-right">
-                            <div className="flex flex-col items-end gap-1">
-                              <span className="text-[10px] font-mono">{a.daily_sent_today}/{a.daily_limit} · {usePct}%</span>
-                              <div className="w-24 h-1 bg-prospex-bg rounded-full">
-                                <div className={cn('h-1 rounded-full', barColor)} style={{ width: `${usePct}%` }} />
+                        <Fragment key={a.account}>
+                          <tr className="table-row cursor-pointer" onClick={() => setExpandedAccount(isExpanded ? null : a.account)}>
+                            <td className="px-3 py-2 text-prospex-dim">
+                              {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                            </td>
+                            <td className="px-3 py-2 text-prospex-text font-mono">@{a.account}</td>
+                            <td className="px-3 py-2 text-right font-mono text-prospex-cyan font-bold">{a.sent}</td>
+                            <td className="px-3 py-2 text-right font-mono text-prospex-text">{a.window_replies}</td>
+                            <td className="px-3 py-2 text-right font-mono text-prospex-green">{a.window_positive}</td>
+                            <td className="px-3 py-2 text-right font-mono text-prospex-red/80">{a.window_negative}</td>
+                            <td className="px-3 py-2 text-right font-mono text-prospex-muted">{replyRate}%</td>
+                            <td className="px-3 py-2 text-right">
+                              <div className="flex flex-col items-end gap-1">
+                                <span className="text-[10px] font-mono">{a.daily_sent_today}/{a.daily_limit} · {usePct}%</span>
+                                <div className="w-24 h-1 bg-prospex-bg rounded-full">
+                                  <div className={cn('h-1 rounded-full', barColor)} style={{ width: `${usePct}%` }} />
+                                </div>
                               </div>
-                            </div>
-                          </td>
-                          <td className="px-3 py-2 text-right font-mono text-prospex-muted">{a.total_sent}</td>
-                          <td className="px-3 py-2 text-right font-mono text-prospex-green">{a.total_replies}</td>
-                        </tr>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr>
+                              <td colSpan={8} className="bg-prospex-bg/60 border-t border-prospex-border/50 px-3 py-3">
+                                {accountMessages.length === 0 ? (
+                                  <p className="text-[11px] text-prospex-dim italic">
+                                    No individual messages in this window. (This account&apos;s totals above may come from an older log format.)
+                                  </p>
+                                ) : (
+                                  <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
+                                    <p className="text-[10px] font-mono text-prospex-dim uppercase mb-2">
+                                      Messages from @{a.account} · {accountMessages.length} shown
+                                    </p>
+                                    {accountMessages.map((m, i) => (
+                                      <div key={`${m.lead_id}-${m.created_at}-${i}`}
+                                        className="flex items-start gap-2 py-1.5 border-b border-prospex-border/20 last:border-0">
+                                        <span className="text-[9px] font-mono text-prospex-dim mt-0.5 whitespace-nowrap flex-shrink-0">
+                                          {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        </span>
+                                        <div className="flex-1 min-w-0">
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            {m.lead_id ? (
+                                              <Link href={`/leads/${m.lead_id}`} className="text-[11px] font-mono text-prospex-cyan hover:underline truncate">
+                                                {m.lead_business}
+                                              </Link>
+                                            ) : (
+                                              <span className="text-[11px] font-mono text-prospex-text truncate">{m.lead_business}</span>
+                                            )}
+                                            <span className="text-[9px] text-prospex-dim font-mono">· {m.stage}</span>
+                                            <ReplyChip status={m.reply_status} />
+                                            {m.booked && <span className="text-[9px] font-mono text-prospex-green border border-prospex-green/40 rounded px-1.5 py-0.5">📅 booked</span>}
+                                          </div>
+                                          {m.message_sent && (
+                                            <p className="text-[10px] text-prospex-dim italic mt-0.5 line-clamp-2">
+                                              &ldquo;{m.message_sent.slice(0, 200)}{m.message_sent.length > 200 ? '…' : ''}&rdquo;
+                                            </p>
+                                          )}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>

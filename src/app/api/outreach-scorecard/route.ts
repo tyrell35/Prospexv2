@@ -41,10 +41,12 @@ function windowFor(period: Period): { from: string | null; to: string; label: st
 
 interface LogRow {
   lead_id: string | null;
+  lead_business: string | null;
   channel: string | null;
   outcome: string | null;
   sender_account: string | null;
   stage: string | null;
+  message_sent: string | null;
   created_at: string;
 }
 
@@ -77,7 +79,7 @@ export async function GET(request: NextRequest) {
   // ─── Pull logs ────────────────────────────────────────
   let logsQ = supabaseAdmin
     .from('outreach_logs')
-    .select('lead_id, channel, outcome, sender_account, stage, created_at')
+    .select('lead_id, lead_business, channel, outcome, sender_account, stage, message_sent, created_at')
     .lte('created_at', to)
     .limit(50000);
   if (from) logsQ = logsQ.gte('created_at', from);
@@ -188,15 +190,126 @@ export async function GET(request: NextRequest) {
   // ─── Total attempts (any outcome) ─────────────────────
   const totals = { sent, drafts, blocked, unsent, actions_logged: sent + drafts + blocked + unsent };
 
+  // ═══════════════════════════════════════════════════════
+  // REPLY ATTRIBUTION
+  // For every lead that responded in the window, find the most recent
+  // outreach_logs row with outcome='sent' for that lead (may be outside
+  // the window if the lead was messaged weeks ago and replied today).
+  // Credit that log's sender_account with the reply and sentiment.
+  // ═══════════════════════════════════════════════════════
+  interface Attribution {
+    lead_id: string;
+    lead_business: string;
+    sender_account: string;
+    channel: string;
+    sentiment: 'positive' | 'negative' | 'neutral';
+    sent_at: string;
+    responded_at: string;
+    message_sent: string;
+  }
+  const respondedLeads = leads.filter(l => inWindow(l.responded_at));
+  const respondedIds = respondedLeads.map(l => l.id);
+  let attribution: Attribution[] = [];
+  if (respondedIds.length > 0) {
+    const { data: sentLogs } = await supabaseAdmin
+      .from('outreach_logs')
+      .select('lead_id, lead_business, sender_account, channel, message_sent, created_at')
+      .in('lead_id', respondedIds)
+      .eq('outcome', 'sent')
+      .order('created_at', { ascending: false })
+      .limit(20000);
+    const mostRecentByLead = new Map<string, { lead_business: string | null; sender_account: string | null; channel: string | null; message_sent: string | null; created_at: string }>();
+    for (const s of (sentLogs || []) as Array<{ lead_id: string; lead_business: string | null; sender_account: string | null; channel: string | null; message_sent: string | null; created_at: string }>) {
+      if (!mostRecentByLead.has(s.lead_id)) mostRecentByLead.set(s.lead_id, s);
+    }
+    for (const l of respondedLeads) {
+      const s = mostRecentByLead.get(l.id);
+      if (!s) continue;
+      const raw = (l.response_sentiment || '').toLowerCase();
+      const sentiment: 'positive' | 'negative' | 'neutral' =
+        raw === 'positive' ? 'positive' : raw === 'negative' ? 'negative' : 'neutral';
+      attribution.push({
+        lead_id: l.id,
+        lead_business: s.lead_business || '(unknown clinic)',
+        sender_account: s.sender_account || '(no account)',
+        channel: s.channel || 'unknown',
+        sentiment,
+        sent_at: s.created_at,
+        responded_at: l.responded_at!,
+        message_sent: s.message_sent || '',
+      });
+    }
+  }
+
+  // Per-account reply counts (window)
+  const replies_by_account_map = new Map<string, { replies: number; positive: number; negative: number; neutral: number }>();
+  for (const a of attribution) {
+    const entry = replies_by_account_map.get(a.sender_account) || { replies: 0, positive: 0, negative: 0, neutral: 0 };
+    entry.replies++;
+    entry[a.sentiment]++;
+    replies_by_account_map.set(a.sender_account, entry);
+  }
+  const by_account_enriched = by_account.map(a => {
+    const r = replies_by_account_map.get(a.account) || { replies: 0, positive: 0, negative: 0, neutral: 0 };
+    return {
+      ...a,
+      window_replies: r.replies,
+      window_positive: r.positive,
+      window_negative: r.negative,
+      window_neutral: r.neutral,
+    };
+  });
+
+  // Positive-reply cards for the callout section
+  const positive_reply_log = attribution
+    .filter(a => a.sentiment === 'positive')
+    .sort((a, b) => b.responded_at.localeCompare(a.responded_at))
+    .slice(0, 20);
+
+  // ═══════════════════════════════════════════════════════
+  // MESSAGE LOG (per-account drill-down source)
+  // Last 200 sends in the window, most recent first, with lead's current
+  // reply state stitched in so the UI can render 🟢/🔴/🟡/⏳ chips.
+  // ═══════════════════════════════════════════════════════
+  const leadStateById = new Map<string, LeadRow>();
+  for (const l of leads) leadStateById.set(l.id, l);
+  const message_log = logs
+    .filter(l => l.outcome === 'sent')
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .slice(0, 200)
+    .map(l => {
+      const leadState = l.lead_id ? leadStateById.get(l.lead_id) : undefined;
+      const sentiment = (leadState?.response_sentiment || '').toLowerCase();
+      const hasReply = !!(leadState?.responded_at && inWindow(leadState.responded_at));
+      const replyChip: 'positive' | 'negative' | 'neutral' | 'awaiting' =
+        !hasReply ? 'awaiting'
+        : sentiment === 'positive' ? 'positive'
+        : sentiment === 'negative' ? 'negative'
+        : 'neutral';
+      return {
+        lead_id: l.lead_id,
+        lead_business: l.lead_business || '(unknown)',
+        sender_account: l.sender_account || '(no account)',
+        channel: l.channel || 'unknown',
+        stage: l.stage || 'unknown',
+        message_sent: (l.message_sent || '').slice(0, 240),
+        created_at: l.created_at,
+        reply_status: replyChip,
+        booked: !!(leadState?.booked_at && inWindow(leadState.booked_at)),
+      };
+    });
+
   return NextResponse.json({
     success: true,
     window: { period, from, to, label },
     filters: { channel: channelFilter || 'all', account: accountFilter || null },
     totals,
     funnel,
-    by_account,
+    by_account: by_account_enriched,
     by_day,
     by_channel,
     by_stage,
+    positive_reply_log,
+    message_log,
   });
 }

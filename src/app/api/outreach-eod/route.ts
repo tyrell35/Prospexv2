@@ -39,9 +39,11 @@ interface Summary {
   date: string;
   totals: { sent: number; drafts: number; blocked: number; unsent: number };
   by_channel: Record<string, number>;
-  by_account: Array<{ account: string; sent: number; used: number; limit: number; pct: number; replies_today?: number }>;
+  by_account: Array<{ account: string; sent: number; used: number; limit: number; pct: number; replies_today: number; positive_today: number; negative_today: number }>;
   by_stage: Record<string, number>;
   top_replies: Array<{ lead_business: string; at: string }>;
+  positive_replies: Array<{ lead_business: string; sender_account: string; channel: string; message_sent: string; responded_at: string }>;
+  reply_totals: { replies: number; positive: number; negative: number; neutral: number };
 }
 
 async function buildSummary(sinceISO?: string): Promise<Summary> {
@@ -83,27 +85,100 @@ async function buildSummary(sinceISO?: string): Promise<Summary> {
     accountMeta = (data || []) as AccountRow[];
   }
 
+  // ═══════════════════════════════════════════════════════
+  // REPLY ATTRIBUTION for today
+  // For each lead that responded within today's window, find the most
+  // recent outreach_logs row with outcome='sent' for that lead (may be
+  // dated earlier if they were messaged days ago) and credit that
+  // log's sender_account with the reply.
+  // ═══════════════════════════════════════════════════════
+  const { data: repliedLeadsRaw } = await supabaseAdmin
+    .from('leads')
+    .select('id, responded_at, response_sentiment, booked_at')
+    .gte('responded_at', from)
+    .lte('responded_at', to)
+    .limit(5000);
+  const repliedLeads = (repliedLeadsRaw || []) as Array<{ id: string; responded_at: string | null; response_sentiment: string | null; booked_at: string | null }>;
+
+  interface Attribution {
+    lead_business: string;
+    sender_account: string;
+    channel: string;
+    sentiment: 'positive' | 'negative' | 'neutral';
+    message_sent: string;
+    responded_at: string;
+  }
+  let attribution: Attribution[] = [];
+  if (repliedLeads.length > 0) {
+    const respondedIds = repliedLeads.map(l => l.id);
+    const { data: sentLogs } = await supabaseAdmin
+      .from('outreach_logs')
+      .select('lead_id, lead_business, sender_account, channel, message_sent, created_at')
+      .in('lead_id', respondedIds)
+      .eq('outcome', 'sent')
+      .order('created_at', { ascending: false })
+      .limit(10000);
+    const mostRecent = new Map<string, { lead_business: string | null; sender_account: string | null; channel: string | null; message_sent: string | null }>();
+    for (const s of (sentLogs || []) as Array<{ lead_id: string; lead_business: string | null; sender_account: string | null; channel: string | null; message_sent: string | null; created_at: string }>) {
+      if (!mostRecent.has(s.lead_id)) mostRecent.set(s.lead_id, s);
+    }
+    for (const l of repliedLeads) {
+      const s = mostRecent.get(l.id);
+      if (!s) continue;
+      const raw = (l.response_sentiment || '').toLowerCase();
+      const sentiment: 'positive' | 'negative' | 'neutral' =
+        raw === 'positive' ? 'positive' : raw === 'negative' ? 'negative' : 'neutral';
+      attribution.push({
+        lead_business: s.lead_business || '(unknown clinic)',
+        sender_account: s.sender_account || '(no account)',
+        channel: s.channel || 'unknown',
+        sentiment,
+        message_sent: s.message_sent || '',
+        responded_at: l.responded_at!,
+      });
+    }
+  }
+
+  // Per-account reply tallies today
+  const replyTallyByAccount = new Map<string, { replies: number; positive: number; negative: number }>();
+  for (const a of attribution) {
+    const entry = replyTallyByAccount.get(a.sender_account) || { replies: 0, positive: 0, negative: 0 };
+    entry.replies++;
+    if (a.sentiment === 'positive') entry.positive++;
+    else if (a.sentiment === 'negative') entry.negative++;
+    replyTallyByAccount.set(a.sender_account, entry);
+  }
+
   const by_account = accountUsernames
     .map(u => {
       const meta = accountMeta.find(m => m.username === u);
       const sent = perAccountSent.get(u) || 0;
       const limit = meta?.daily_limit || 30;
       const used = meta?.daily_sent_today || sent;
-      return { account: u, sent, used, limit, pct: Math.round((used / limit) * 100) };
+      const r = replyTallyByAccount.get(u) || { replies: 0, positive: 0, negative: 0 };
+      return {
+        account: u, sent, used, limit,
+        pct: Math.round((used / limit) * 100),
+        replies_today: r.replies,
+        positive_today: r.positive,
+        negative_today: r.negative,
+      };
     })
     .sort((a, b) => b.sent - a.sent);
 
-  // Top replies logged today
-  const { data: repliesRaw } = await supabaseAdmin
-    .from('outreach_logs')
-    .select('lead_business, created_at')
-    .gte('created_at', from)
-    .lte('created_at', to)
-    .eq('outcome', 'replied')
-    .limit(10);
-  const top_replies = ((repliesRaw || []) as Array<{ lead_business: string | null; created_at: string }>)
-    .filter(r => r.lead_business)
-    .map(r => ({ lead_business: r.lead_business!, at: r.created_at }));
+  // Legacy top_replies (kept for backward-compat with any external callers)
+  const top_replies = attribution.slice(0, 10).map(a => ({ lead_business: a.lead_business, at: a.responded_at }));
+
+  const positive_replies = attribution
+    .filter(a => a.sentiment === 'positive')
+    .sort((a, b) => b.responded_at.localeCompare(a.responded_at));
+
+  const reply_totals = {
+    replies: attribution.length,
+    positive: attribution.filter(a => a.sentiment === 'positive').length,
+    negative: attribution.filter(a => a.sentiment === 'negative').length,
+    neutral: attribution.filter(a => a.sentiment === 'neutral').length,
+  };
 
   return {
     date: from.slice(0, 10),
@@ -112,6 +187,8 @@ async function buildSummary(sinceISO?: string): Promise<Summary> {
     by_stage,
     by_account,
     top_replies,
+    positive_replies,
+    reply_totals,
   };
 }
 
@@ -121,6 +198,9 @@ function formatSlack(s: Summary): { text: string; blocks: unknown[] } {
 
   const header = `📊 *Outreach EOD — ${dateLabel}*`;
   const totalsLine = `*${s.totals.sent}* sent · ${s.totals.drafts} drafts · ${s.totals.blocked} blocked · ${s.totals.unsent} unsent  ·  ${totalActions} logged actions`;
+
+  const replyTotalsLine = `💬 *${s.reply_totals.replies}* replies · 🟢 *${s.reply_totals.positive}* positive · 🔴 ${s.reply_totals.negative} negative · 🟡 ${s.reply_totals.neutral} neutral`;
+
   const channelLine = Object.entries(s.by_channel).length > 0
     ? Object.entries(s.by_channel).map(([c, n]) => `${c === 'instagram' ? '📷' : c === 'whatsapp' ? '💬' : c === 'sms' ? '📱' : '•'} ${c}: *${n}*`).join('  ·  ')
     : '_no messages logged today_';
@@ -128,25 +208,39 @@ function formatSlack(s: Summary): { text: string; blocks: unknown[] } {
   const accountLines = s.by_account.length > 0
     ? s.by_account.map(a => {
         const bar = a.pct >= 100 ? '🔴' : a.pct >= 80 ? '🟡' : '🟢';
-        return `${bar} \`@${a.account}\` — *${a.sent}* today · ${a.used}/${a.limit} of daily limit (${a.pct}%)`;
+        const replies = a.replies_today > 0
+          ? `  ·  💬 ${a.replies_today} (🟢${a.positive_today} 🔴${a.negative_today})`
+          : '';
+        return `${bar} \`@${a.account}\` — *${a.sent}* sent · ${a.used}/${a.limit} (${a.pct}%)${replies}`;
       }).join('\n')
     : '_no per-account activity recorded_';
 
-  const repliesLine = s.top_replies.length > 0
-    ? '💬 *Replies logged today:* ' + s.top_replies.slice(0, 5).map(r => `_${r.lead_business}_`).join(', ')
+  // Positive wins with attribution — the close list
+  const winsBlock = s.positive_replies.length > 0
+    ? '🎯 *Positive replies today:*\n' + s.positive_replies.slice(0, 8).map(r => {
+        const icon = r.channel === 'instagram' ? '📷' : r.channel === 'whatsapp' ? '💬' : '📱';
+        const snippet = r.message_sent ? `\n     _"${r.message_sent.slice(0, 100).replace(/\n/g, ' ')}${r.message_sent.length > 100 ? '…' : ''}"_` : '';
+        return `${icon} *${r.lead_business}* — from \`@${r.sender_account}\`${snippet}`;
+      }).join('\n')
     : null;
 
-  const textParts = [header, totalsLine, `By channel: ${channelLine}`, `*Per account:*\n${accountLines}`];
-  if (repliesLine) textParts.push(repliesLine);
+  const textParts = [
+    header,
+    totalsLine,
+    replyTotalsLine,
+    `By channel: ${channelLine}`,
+    `*Per account:*\n${accountLines}`,
+  ];
+  if (winsBlock) textParts.push(winsBlock);
   const text = textParts.join('\n');
 
   const blocks: unknown[] = [
     { type: 'section', text: { type: 'mrkdwn', text: header } },
-    { type: 'section', text: { type: 'mrkdwn', text: totalsLine } },
+    { type: 'section', text: { type: 'mrkdwn', text: `${totalsLine}\n${replyTotalsLine}` } },
     { type: 'section', text: { type: 'mrkdwn', text: `*By channel:* ${channelLine}` } },
     { type: 'section', text: { type: 'mrkdwn', text: `*Per account:*\n${accountLines}` } },
   ];
-  if (repliesLine) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: repliesLine } });
+  if (winsBlock) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: winsBlock } });
   blocks.push({ type: 'divider' });
   return { text, blocks };
 }
