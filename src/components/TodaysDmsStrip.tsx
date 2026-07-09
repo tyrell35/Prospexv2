@@ -8,7 +8,7 @@ interface Summary {
   date: string;
   totals: { sent: number; drafts: number; blocked: number; unsent: number };
   by_channel: Record<string, number>;
-  by_account: Array<{ account: string; sent: number; used: number; limit: number; pct: number }>;
+  by_account: Array<{ account: string; sent: number; used: number; limit: number; target: number; stage: string; pct: number }>;
 }
 
 // Live view of today's outreach — 1-liner strip you can drop anywhere.
@@ -76,16 +76,21 @@ export default function TodaysDmsStrip({ className }: { className?: string }) {
 
             {summary!.by_account.length > 0 && (
               <div className="flex items-center gap-2 flex-wrap">
-                {summary!.by_account.slice(0, 4).map(a => (
-                  <span key={a.account}
-                    className={cn('text-[10px] px-1.5 py-0.5 rounded border font-mono',
-                      a.pct >= 100 ? 'bg-prospex-red/10 text-prospex-red border-prospex-red/30'
-                        : a.pct >= 80 ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                        : 'bg-prospex-bg text-prospex-muted border-prospex-border')}
-                    title={`${a.account}: ${a.sent} today, ${a.used}/${a.limit} of daily limit`}>
-                    @{a.account} · {a.sent}
-                  </span>
-                ))}
+                {summary!.by_account.slice(0, 4).map(a => {
+                  const stageIcon = a.stage === 'new' ? '🆕' : a.stage === 'paused' ? '⏸' : a.stage === 'warming' ? '🔥' : '';
+                  const cls = a.pct >= 100
+                    ? 'bg-prospex-green/10 text-prospex-green border-prospex-green/30'
+                    : a.pct >= 80 ? 'bg-prospex-cyan/10 text-prospex-cyan border-prospex-cyan/30'
+                    : a.pct >= 50 ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                    : 'bg-prospex-bg text-prospex-muted border-prospex-border';
+                  return (
+                    <span key={a.account}
+                      className={cn('text-[10px] px-1.5 py-0.5 rounded border font-mono', cls)}
+                      title={`${a.account}: ${a.used}/${a.target} target today · hard cap ${a.limit} · stage ${a.stage}`}>
+                      @{a.account} {stageIcon} · {a.used}/{a.target}
+                    </span>
+                  );
+                })}
               </div>
             )}
           </>

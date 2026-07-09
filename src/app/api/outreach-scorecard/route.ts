@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { authOr401 } from '@/lib/api-auth';
+import { computeWarmupState } from '@/lib/ig-warmup';
 
 // ═══════════════════════════════════════════════════════
 // /api/outreach-scorecard
@@ -61,9 +62,12 @@ interface LeadRow {
 interface AccountRow {
   username: string;
   daily_limit: number | null;
+  daily_target: number | null;
   daily_sent_today: number | null;
   total_sent: number | null;
   total_replies: number | null;
+  warmup_stage: string | null;
+  warmup_started_at: string | null;
 }
 
 export async function GET(request: NextRequest) {
@@ -156,18 +160,27 @@ export async function GET(request: NextRequest) {
   if (accountUsernames.length > 0) {
     const { data } = await supabaseAdmin
       .from('ig_accounts')
-      .select('username, daily_limit, daily_sent_today, total_sent, total_replies')
+      .select('username, daily_limit, daily_target, daily_sent_today, total_sent, total_replies, warmup_stage, warmup_started_at')
       .in('username', accountUsernames);
     accountMeta = (data || []) as AccountRow[];
   }
   const by_account = accountUsernames
     .map(u => {
       const meta = accountMeta.find(m => m.username === u);
+      const warmup = computeWarmupState({
+        warmup_stage: meta?.warmup_stage || null,
+        warmup_started_at: meta?.warmup_started_at || null,
+        daily_target: meta?.daily_target ?? null,
+        daily_limit: meta?.daily_limit ?? null,
+      });
       return {
         account: u,
         sent: perAccountSent.get(u) || 0,
         daily_sent_today: meta?.daily_sent_today || 0,
-        daily_limit: meta?.daily_limit || 30,
+        daily_limit: warmup.hard_limit,
+        daily_target: warmup.effective_target,
+        warmup_stage: warmup.stage,
+        warmup_days: warmup.days_in_warmup,
         total_sent: meta?.total_sent || 0,
         total_replies: meta?.total_replies || 0,
       };

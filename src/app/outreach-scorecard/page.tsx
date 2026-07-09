@@ -24,6 +24,7 @@ interface Scorecard {
   };
   by_account: Array<{
     account: string; sent: number; daily_sent_today: number; daily_limit: number;
+    daily_target: number; warmup_stage: 'new' | 'warming' | 'warm' | 'paused'; warmup_days: number;
     total_sent: number; total_replies: number;
     window_replies: number; window_positive: number; window_negative: number; window_neutral: number;
   }>;
@@ -324,14 +325,17 @@ export default function OutreachScorecardPage() {
                       <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">🟢 Pos</th>
                       <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">🔴 Neg</th>
                       <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Reply rate</th>
-                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Today / limit</th>
+                      <th className="text-right px-3 py-2 font-mono text-[10px] text-prospex-dim uppercase">Today / target</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.by_account.map(a => {
-                      const usePct = a.daily_limit > 0 ? Math.round((a.daily_sent_today / a.daily_limit) * 100) : 0;
-                      const barColor = usePct >= 100 ? 'bg-prospex-red' : usePct >= 80 ? 'bg-amber-400' : 'bg-prospex-cyan';
+                      const target = a.daily_target || a.daily_limit || 30;
+                      const usePct = target > 0 ? Math.round((a.daily_sent_today / target) * 100) : 0;
+                      const overCap = a.daily_limit > 0 && a.daily_sent_today >= a.daily_limit;
+                      const barColor = overCap ? 'bg-prospex-red' : usePct >= 100 ? 'bg-prospex-green' : usePct >= 80 ? 'bg-prospex-cyan' : 'bg-prospex-cyan/60';
                       const replyRate = a.sent > 0 ? Math.round((a.window_replies / a.sent) * 1000) / 10 : 0;
+                      const stageBadge = a.warmup_stage === 'new' ? '🆕' : a.warmup_stage === 'warming' ? `🔥d${a.warmup_days}` : a.warmup_stage === 'paused' ? '⏸' : '';
                       const isExpanded = expandedAccount === a.account;
                       const accountMessages = messagesByAccount.get(a.account) || [];
                       return (
@@ -340,7 +344,10 @@ export default function OutreachScorecardPage() {
                             <td className="px-3 py-2 text-prospex-dim">
                               {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                             </td>
-                            <td className="px-3 py-2 text-prospex-text font-mono">@{a.account}</td>
+                            <td className="px-3 py-2 text-prospex-text font-mono">
+                              @{a.account}
+                              {stageBadge && <span className="ml-1 text-[9px]" title={`Warmup stage: ${a.warmup_stage}`}>{stageBadge}</span>}
+                            </td>
                             <td className="px-3 py-2 text-right font-mono text-prospex-cyan font-bold">{a.sent}</td>
                             <td className="px-3 py-2 text-right font-mono text-prospex-text">{a.window_replies}</td>
                             <td className="px-3 py-2 text-right font-mono text-prospex-green">{a.window_positive}</td>
@@ -348,9 +355,11 @@ export default function OutreachScorecardPage() {
                             <td className="px-3 py-2 text-right font-mono text-prospex-muted">{replyRate}%</td>
                             <td className="px-3 py-2 text-right">
                               <div className="flex flex-col items-end gap-1">
-                                <span className="text-[10px] font-mono">{a.daily_sent_today}/{a.daily_limit} · {usePct}%</span>
+                                <span className="text-[10px] font-mono" title={`Hard cap: ${a.daily_limit}`}>
+                                  {a.daily_sent_today}/{target} · {usePct}%
+                                </span>
                                 <div className="w-24 h-1 bg-prospex-bg rounded-full">
-                                  <div className={cn('h-1 rounded-full', barColor)} style={{ width: `${usePct}%` }} />
+                                  <div className={cn('h-1 rounded-full', barColor)} style={{ width: `${Math.min(100, usePct)}%` }} />
                                 </div>
                               </div>
                             </td>

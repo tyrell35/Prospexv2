@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { X, Check, XCircle, FileEdit, Ban, AlertCircle, Loader2, Plus, MessageCircle, Instagram, Phone } from 'lucide-react';
+import { X, Check, XCircle, FileEdit, Ban, AlertCircle, Loader2, Plus, MessageCircle, Instagram, Phone, Flame, Snowflake } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
+import { computeWarmupState } from '@/lib/ig-warmup';
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -16,6 +17,9 @@ interface IgAccount {
   status: string | null;
   daily_sent_today: number | null;
   daily_limit: number | null;
+  daily_target: number | null;
+  warmup_stage: 'new' | 'warming' | 'warm' | 'paused' | null;
+  warmup_started_at: string | null;
 }
 
 interface Props {
@@ -76,7 +80,7 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
       if (channel === 'instagram') {
         const { data } = await supabase
           .from('ig_accounts')
-          .select('id, username, display_name, status, daily_sent_today, daily_limit')
+          .select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at')
           .in('status', ['active', 'warming'])
           .order('username');
         setAccounts((data || []) as IgAccount[]);
@@ -110,7 +114,7 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
       // reload accounts
       const { data: fresh } = await supabase
         .from('ig_accounts')
-        .select('id, username, display_name, status, daily_sent_today, daily_limit')
+        .select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at')
         .in('status', ['active', 'warming'])
         .order('username');
       setAccounts((fresh || []) as IgAccount[]);
@@ -134,6 +138,27 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
         setError('Pick an Instagram account (or add one).');
         setSaving(false);
         return;
+      }
+      // Warmup gate — only enforced when the user is logging a real send.
+      // Drafts/blocked/unsent still log so the audit trail stays honest.
+      if (outcome === 'sent') {
+        const acc = accounts.find(a => a.username === selectedAccount);
+        if (acc) {
+          const w = computeWarmupState(acc);
+          const used = acc.daily_sent_today || 0;
+          if (w.stage === 'new') {
+            setError(`@${selectedAccount} hasn't started warmup. Go to DM Campaigns → IG Accounts → click "Start" first.`);
+            setSaving(false); return;
+          }
+          if (w.stage === 'paused') {
+            setError(`@${selectedAccount} is paused. Resume it in DM Campaigns → IG Accounts before sending.`);
+            setSaving(false); return;
+          }
+          if (used >= w.hard_limit) {
+            setError(`@${selectedAccount} has hit its hard cap for today (${w.hard_limit}). Wait until the daily reset, or use a different account.`);
+            setSaving(false); return;
+          }
+        }
       }
       sender = selectedAccount;
       if (typeof window !== 'undefined') localStorage.setItem(LAST_ACCOUNT_KEY, selectedAccount);
@@ -238,14 +263,14 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
                 <div className="flex items-center gap-2">
                   <select value={selectedAccount} onChange={e => setSelectedAccount(e.target.value)} className="input flex-1">
                     {accounts.map(a => {
+                      const w = computeWarmupState(a);
                       const used = a.daily_sent_today || 0;
-                      const cap = a.daily_limit || 30;
-                      const remain = Math.max(0, cap - used);
-                      const isFull = used >= cap;
+                      const remain = Math.max(0, w.effective_target - used);
+                      const blocked = w.stage === 'new' || w.stage === 'paused' || used >= w.hard_limit;
+                      const stageLabel = w.stage === 'new' ? '🆕 not started' : w.stage === 'paused' ? '⏸ paused' : w.stage === 'warming' ? `🔥 warming d${w.days_in_warmup}` : '🔥 warm';
                       return (
-                        <option key={a.id} value={a.username} disabled={isFull && outcome === 'sent'}>
-                          @{a.username} — {used}/{cap} today {isFull ? '(at limit)' : `· ${remain} left`}
-                          {a.display_name ? ` · ${a.display_name}` : ''}
+                        <option key={a.id} value={a.username} disabled={blocked && outcome === 'sent'}>
+                          @{a.username} · {stageLabel} · {used}/{w.effective_target}{blocked ? ' (blocked)' : ` · ${remain} left`}
                         </option>
                       );
                     })}
@@ -255,21 +280,41 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
                   </button>
                 </div>
               )}
-              {/* Live daily-usage bar for selected account */}
+              {/* Live target-vs-actual bar + warmup status for selected account */}
               {selectedAccount && !showAddAccount && (() => {
                 const a = accounts.find(x => x.username === selectedAccount);
                 if (!a) return null;
+                const w = computeWarmupState(a);
                 const used = a.daily_sent_today || 0;
-                const cap = a.daily_limit || 30;
-                const pct = Math.min(100, Math.round((used / cap) * 100));
+                const pct = w.effective_target > 0 ? Math.min(100, Math.round((used / w.effective_target) * 100)) : 0;
+                const overTarget = used >= w.effective_target && w.stage !== 'new' && w.stage !== 'paused';
+                const atHardCap = used >= w.hard_limit;
+                const stageIcon = w.stage === 'new' || w.stage === 'paused' ? <Snowflake className="w-2.5 h-2.5" /> : <Flame className="w-2.5 h-2.5" />;
+                const stageCls = w.stage === 'paused' ? 'text-prospex-red border-prospex-red/40'
+                  : w.stage === 'new' ? 'text-prospex-dim border-prospex-border'
+                  : w.stage === 'warming' ? 'text-amber-400 border-amber-500/40'
+                  : 'text-prospex-green border-prospex-green/40';
                 return (
-                  <div className="mt-2">
-                    <div className="w-full h-1 bg-prospex-bg rounded-full">
-                      <div className={cn('h-1 rounded-full', pct >= 100 ? 'bg-prospex-red' : pct >= 80 ? 'bg-amber-400' : 'bg-prospex-cyan')} style={{ width: `${pct}%` }} />
+                  <div className="mt-2 space-y-1.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className={cn('inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded border', stageCls)}>
+                        {stageIcon} {w.stage}{w.stage === 'warming' ? ` · day ${w.days_in_warmup}` : ''}
+                      </span>
+                      <span className="text-[9px] text-prospex-dim">{w.procedure_step}</span>
                     </div>
-                    <p className="text-[9px] text-prospex-dim mt-1">
-                      {used}/{cap} used today {pct >= 80 && '· nearing daily limit'}
+                    <div className="w-full h-1 bg-prospex-bg rounded-full">
+                      <div className={cn('h-1 rounded-full', atHardCap ? 'bg-prospex-red' : overTarget ? 'bg-amber-400' : pct >= 80 ? 'bg-prospex-cyan' : 'bg-prospex-cyan/60')} style={{ width: `${pct}%` }} />
+                    </div>
+                    <p className="text-[9px] text-prospex-dim">
+                      {used}/{w.effective_target} target{overTarget && !atHardCap && ` · ⚠ over KPI · hard cap ${w.hard_limit}`}
+                      {atHardCap && ` · 🛑 hard cap ${w.hard_limit} hit — do not send`}
                     </p>
+                    {(w.stage === 'new' || w.stage === 'paused') && (
+                      <div className="p-2 bg-prospex-red/10 border border-prospex-red/30 rounded text-[10px] text-prospex-red flex items-start gap-1.5">
+                        <AlertCircle className="w-3 h-3 mt-0.5 shrink-0" />
+                        {w.stage === 'new' ? 'Warmup not started for this account. Open DM Campaigns → IG Accounts → Start warmup first.' : 'Account is paused. Resume from DM Campaigns → IG Accounts before sending.'}
+                      </div>
+                    )}
                   </div>
                 );
               })()}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
 import { authOr401 } from '@/lib/api-auth';
+import { computeWarmupState } from '@/lib/ig-warmup';
 
 // ═══════════════════════════════════════════════════════
 // DM CAMPAIGN MANAGER
@@ -611,7 +612,17 @@ async function getAccounts() {
     .select('*')
     .order('username', { ascending: true });
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ success: true, accounts: data || [] });
+  const accounts = (data || []).map(a => {
+    const acc = a as Record<string, unknown>;
+    const warmup = computeWarmupState({
+      warmup_stage: (acc.warmup_stage as string | null) ?? null,
+      warmup_started_at: (acc.warmup_started_at as string | null) ?? null,
+      daily_target: (acc.daily_target as number | null) ?? null,
+      daily_limit: (acc.daily_limit as number | null) ?? null,
+    });
+    return { ...acc, warmup };
+  });
+  return NextResponse.json({ success: true, accounts });
 }
 
 interface ManageAccountsBody {
@@ -619,6 +630,8 @@ interface ManageAccountsBody {
   username?: string;
   display_name?: string;
   daily_limit?: number;
+  daily_target?: number;
+  warmup_stage?: 'new' | 'warming' | 'warm' | 'paused';
   status?: string;
   notes?: string;
   account_id?: string;
@@ -629,12 +642,17 @@ async function manageAccounts(body: ManageAccountsBody) {
 
   if (sub_action === 'add') {
     if (!body.username) return NextResponse.json({ error: 'username required' }, { status: 400 });
+    // New accounts default to stage='new' — they don't send until warmup is
+    // explicitly started. That prevents the "created an account → auto-sent
+    // 30 cold DMs on day 1 → banned" failure mode.
     const { data, error } = await supabase
       .from('ig_accounts')
       .insert({
         username: body.username,
         display_name: body.display_name || null,
         daily_limit: body.daily_limit || 30,
+        daily_target: body.daily_target || 30,
+        warmup_stage: body.warmup_stage || 'new',
         status: body.status || 'active',
         notes: body.notes || null,
       })
@@ -649,11 +667,67 @@ async function manageAccounts(body: ManageAccountsBody) {
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (body.display_name !== undefined) updates.display_name = body.display_name;
     if (body.daily_limit !== undefined) updates.daily_limit = body.daily_limit;
+    if (body.daily_target !== undefined) updates.daily_target = body.daily_target;
     if (body.status !== undefined) updates.status = body.status;
     if (body.notes !== undefined) updates.notes = body.notes;
     const { data, error } = await supabase
       .from('ig_accounts')
       .update(updates)
+      .eq('id', body.account_id)
+      .select()
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, account: data });
+  }
+
+  // ─── Warmup lifecycle actions ────────────────────────
+  if (sub_action === 'start_warmup') {
+    if (!body.account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 });
+    const { data, error } = await supabase
+      .from('ig_accounts')
+      .update({
+        warmup_stage: 'warming',
+        warmup_started_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', body.account_id)
+      .select()
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, account: data });
+  }
+
+  if (sub_action === 'graduate') {
+    if (!body.account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 });
+    const { data, error } = await supabase
+      .from('ig_accounts')
+      .update({ warmup_stage: 'warm', updated_at: new Date().toISOString() })
+      .eq('id', body.account_id)
+      .select()
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, account: data });
+  }
+
+  if (sub_action === 'pause') {
+    if (!body.account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 });
+    const { data, error } = await supabase
+      .from('ig_accounts')
+      .update({ warmup_stage: 'paused', updated_at: new Date().toISOString() })
+      .eq('id', body.account_id)
+      .select()
+      .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, account: data });
+  }
+
+  if (sub_action === 'resume') {
+    if (!body.account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 });
+    // Resume as 'warm' — assumes user is resuming a mature account; if it
+    // was mid-ramp they can flip back to 'warming' via update.
+    const { data, error } = await supabase
+      .from('ig_accounts')
+      .update({ warmup_stage: 'warm', updated_at: new Date().toISOString() })
       .eq('id', body.account_id)
       .select()
       .single();

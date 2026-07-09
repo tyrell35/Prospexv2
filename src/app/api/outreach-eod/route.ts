@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabase-admin';
 import { authOr401 } from '@/lib/api-auth';
+import { computeWarmupState } from '@/lib/ig-warmup';
 
 // ═══════════════════════════════════════════════════════
 // /api/outreach-eod
@@ -23,8 +24,11 @@ interface LogRow {
 interface AccountRow {
   username: string;
   daily_limit: number | null;
+  daily_target: number | null;
   daily_sent_today: number | null;
   total_replies: number | null;
+  warmup_stage: string | null;
+  warmup_started_at: string | null;
 }
 
 function todayRangeUTC(sinceISO?: string) {
@@ -39,7 +43,7 @@ interface Summary {
   date: string;
   totals: { sent: number; drafts: number; blocked: number; unsent: number };
   by_channel: Record<string, number>;
-  by_account: Array<{ account: string; sent: number; used: number; limit: number; pct: number; replies_today: number; positive_today: number; negative_today: number }>;
+  by_account: Array<{ account: string; sent: number; used: number; limit: number; target: number; pct: number; stage: string; replies_today: number; positive_today: number; negative_today: number }>;
   by_stage: Record<string, number>;
   top_replies: Array<{ lead_business: string; at: string }>;
   positive_replies: Array<{ lead_business: string; sender_account: string; channel: string; message_sent: string; responded_at: string }>;
@@ -80,7 +84,7 @@ async function buildSummary(sinceISO?: string): Promise<Summary> {
   if (accountUsernames.length > 0) {
     const { data } = await supabaseAdmin
       .from('ig_accounts')
-      .select('username, daily_limit, daily_sent_today, total_replies')
+      .select('username, daily_limit, daily_target, daily_sent_today, total_replies, warmup_stage, warmup_started_at')
       .in('username', accountUsernames);
     accountMeta = (data || []) as AccountRow[];
   }
@@ -153,12 +157,19 @@ async function buildSummary(sinceISO?: string): Promise<Summary> {
     .map(u => {
       const meta = accountMeta.find(m => m.username === u);
       const sent = perAccountSent.get(u) || 0;
-      const limit = meta?.daily_limit || 30;
       const used = meta?.daily_sent_today || sent;
+      const warmup = computeWarmupState({
+        warmup_stage: meta?.warmup_stage || null,
+        warmup_started_at: meta?.warmup_started_at || null,
+        daily_target: meta?.daily_target ?? null,
+        daily_limit: meta?.daily_limit ?? null,
+      });
+      const target = warmup.effective_target;
+      const limit = warmup.hard_limit;
       const r = replyTallyByAccount.get(u) || { replies: 0, positive: 0, negative: 0 };
       return {
-        account: u, sent, used, limit,
-        pct: Math.round((used / limit) * 100),
+        account: u, sent, used, limit, target, stage: warmup.stage,
+        pct: target > 0 ? Math.round((used / target) * 100) : 0,
         replies_today: r.replies,
         positive_today: r.positive,
         negative_today: r.negative,
@@ -207,11 +218,12 @@ function formatSlack(s: Summary): { text: string; blocks: unknown[] } {
 
   const accountLines = s.by_account.length > 0
     ? s.by_account.map(a => {
-        const bar = a.pct >= 100 ? '🔴' : a.pct >= 80 ? '🟡' : '🟢';
+        const bar = a.pct >= 100 ? '🟢' : a.pct >= 80 ? '🟢' : a.pct >= 50 ? '🟡' : '🔴';
+        const stageBadge = a.stage === 'new' ? ' 🆕' : a.stage === 'warming' ? ' 🔥warming' : a.stage === 'paused' ? ' ⏸' : '';
         const replies = a.replies_today > 0
           ? `  ·  💬 ${a.replies_today} (🟢${a.positive_today} 🔴${a.negative_today})`
           : '';
-        return `${bar} \`@${a.account}\` — *${a.sent}* sent · ${a.used}/${a.limit} (${a.pct}%)${replies}`;
+        return `${bar} \`@${a.account}\`${stageBadge} — *${a.used}/${a.target}* target (${a.pct}%) · cap ${a.limit}${replies}`;
       }).join('\n')
     : '_no per-account activity recorded_';
 

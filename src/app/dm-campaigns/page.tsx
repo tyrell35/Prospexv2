@@ -5,7 +5,9 @@ import {
   Rocket, Plus, Play, Pause, Trash2, Download, BarChart3, Hammer,
   CheckCircle, XCircle, MessageCircle, Instagram, Phone, Loader2, Filter,
   ListChecks, Users, Activity, X, RefreshCw, AlertCircle, Sparkles, ChevronDown, ChevronRight,
+  Flame, Snowflake, Clock, GraduationCap, Info, ShieldAlert,
 } from 'lucide-react';
+import { WARMUP_PROCEDURE } from '@/lib/ig-warmup';
 import { cn } from '@/lib/utils';
 
 // ─── TYPES ──────────────────────────────────────────────
@@ -57,10 +59,23 @@ interface IgAccount {
   status: string | null;
   daily_sent_today: number | null;
   daily_limit: number | null;
+  daily_target: number | null;
+  warmup_stage: 'new' | 'warming' | 'warm' | 'paused' | null;
+  warmup_started_at: string | null;
   total_sent: number | null;
   total_replies: number | null;
   last_sent_at: string | null;
   notes: string | null;
+  warmup?: {
+    stage: 'new' | 'warming' | 'warm' | 'paused';
+    effective_target: number;
+    hard_limit: number;
+    days_in_warmup: number;
+    next_step_target: number | null;
+    next_step_at: string | null;
+    fully_warm: boolean;
+    procedure_step: string;
+  };
 }
 
 interface VariantStat {
@@ -845,7 +860,10 @@ function AccountsTab() {
   const [loading, setLoading] = useState(true);
   const [newUsername, setNewUsername] = useState('');
   const [newDailyLimit, setNewDailyLimit] = useState(30);
+  const [newDailyTarget, setNewDailyTarget] = useState(30);
+  const [newStage, setNewStage] = useState<'new' | 'warm'>('new');
   const [adding, setAdding] = useState(false);
+  const [showProcedure, setShowProcedure] = useState(false);
 
   const refresh = async () => {
     setLoading(true);
@@ -859,9 +877,18 @@ function AccountsTab() {
   const handleAdd = async () => {
     if (!newUsername.trim()) return;
     setAdding(true);
-    await api('manage_accounts', { sub_action: 'add', username: newUsername.trim(), daily_limit: newDailyLimit, status: 'active' });
+    await api('manage_accounts', {
+      sub_action: 'add',
+      username: newUsername.trim(),
+      daily_limit: newDailyLimit,
+      daily_target: newDailyTarget,
+      warmup_stage: newStage,
+      status: 'active',
+    });
     setNewUsername('');
     setNewDailyLimit(30);
+    setNewDailyTarget(30);
+    setNewStage('new');
     setAdding(false);
     refresh();
   };
@@ -883,13 +910,83 @@ function AccountsTab() {
     refresh();
   };
 
+  const handleWarmup = async (account: IgAccount, sub_action: 'start_warmup' | 'graduate' | 'pause' | 'resume') => {
+    const confirmMsg: Record<string, string> = {
+      start_warmup: `Start 14-day warmup for @${account.username}? It'll send max 5/day for 3 days, then ramp: 10 → 20 → 30.`,
+      graduate: `Mark @${account.username} as fully warm (30/day cap)?`,
+      pause: `Pause @${account.username}? No sends until resumed.`,
+      resume: `Resume @${account.username} as fully warm?`,
+    };
+    if (!confirm(confirmMsg[sub_action])) return;
+    await api('manage_accounts', { sub_action, account_id: account.id });
+    refresh();
+  };
+
+  const handleTargetChange = async (account: IgAccount, daily_target: number) => {
+    await api('manage_accounts', { sub_action: 'update', account_id: account.id, daily_target });
+    refresh();
+  };
+
   return (
     <div className="space-y-4">
+      {/* Warmup procedure — collapsible */}
+      <div className="card p-3 border-prospex-cyan/30">
+        <button onClick={() => setShowProcedure(v => !v)} className="w-full flex items-center justify-between text-left">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-prospex-cyan" />
+            <span className="text-xs font-mono uppercase text-prospex-text">{WARMUP_PROCEDURE.title}</span>
+          </div>
+          {showProcedure ? <ChevronDown className="w-3.5 h-3.5 text-prospex-dim" /> : <ChevronRight className="w-3.5 h-3.5 text-prospex-dim" />}
+        </button>
+        {showProcedure && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3 pt-3 border-t border-prospex-border/50">
+            <div>
+              <h4 className="text-[10px] font-mono uppercase text-prospex-cyan mb-1">Ramp schedule</h4>
+              <ul className="space-y-1">
+                {WARMUP_PROCEDURE.bullets.map((b, i) => <li key={i} className="text-[10px] text-prospex-muted font-mono">{b}</li>)}
+              </ul>
+              <h4 className="text-[10px] font-mono uppercase text-prospex-green mt-3 mb-1">✓ Do</h4>
+              <ul className="space-y-0.5">
+                {WARMUP_PROCEDURE.dos.map((b, i) => <li key={i} className="text-[10px] text-prospex-muted">• {b}</li>)}
+              </ul>
+            </div>
+            <div>
+              <h4 className="text-[10px] font-mono uppercase text-prospex-red mb-1">✕ Don&apos;t</h4>
+              <ul className="space-y-0.5">
+                {WARMUP_PROCEDURE.donts.map((b, i) => <li key={i} className="text-[10px] text-prospex-muted">• {b}</li>)}
+              </ul>
+              <h4 className="text-[10px] font-mono uppercase text-amber-400 mt-3 mb-1">Signs of an action-block</h4>
+              <ul className="space-y-0.5">
+                {WARMUP_PROCEDURE.action_block_signs.map((b, i) => <li key={i} className="text-[10px] text-prospex-muted">• {b}</li>)}
+              </ul>
+              <p className="text-[10px] text-prospex-dim mt-3 italic">If you see any of these, pause the account for 48h before resuming.</p>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="card p-4">
         <h3 className="text-xs font-mono text-prospex-dim uppercase mb-3">Add Account</h3>
-        <div className="flex flex-col md:flex-row gap-2">
-          <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="@username (no @)" className="input flex-1" />
-          <input type="number" min={1} value={newDailyLimit} onChange={e => setNewDailyLimit(parseInt(e.target.value) || 30)} placeholder="Daily limit" className="input w-full md:w-32" />
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+          <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="@username (no @)" className="input md:col-span-2" />
+          <div>
+            <input type="number" min={1} value={newDailyTarget} onChange={e => setNewDailyTarget(parseInt(e.target.value) || 30)} placeholder="Target/day" className="input w-full" />
+            <p className="text-[9px] text-prospex-dim mt-0.5 px-1">KPI target</p>
+          </div>
+          <div>
+            <input type="number" min={1} value={newDailyLimit} onChange={e => setNewDailyLimit(parseInt(e.target.value) || 30)} placeholder="Hard cap" className="input w-full" />
+            <p className="text-[9px] text-prospex-dim mt-0.5 px-1">Hard ceiling</p>
+          </div>
+          <select value={newStage} onChange={e => setNewStage(e.target.value as 'new' | 'warm')} className="input">
+            <option value="new">🆕 New — needs warmup</option>
+            <option value="warm">🔥 Warm — skip ramp</option>
+          </select>
+        </div>
+        <div className="flex items-center justify-between mt-3">
+          <p className="text-[10px] text-prospex-dim">
+            <Info className="w-2.5 h-2.5 inline mr-1" />
+            New accounts start with <strong>0 sends</strong> — hit &ldquo;Start warmup&rdquo; on the row to begin the 14-day ramp.
+          </p>
           <button onClick={handleAdd} disabled={adding || !newUsername.trim()} className="btn-primary text-xs disabled:opacity-50">
             {adding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Add
           </button>
@@ -911,48 +1008,95 @@ function AccountsTab() {
       ) : (
         <div className="card overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-xs min-w-[700px]">
+            <table className="w-full text-xs min-w-[960px]">
               <thead>
                 <tr className="table-header">
-                  <th className="text-left px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Username</th>
-                  <th className="text-center px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Status</th>
-                  <th className="text-center px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Today</th>
-                  <th className="text-center px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Total Sent</th>
-                  <th className="text-center px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Total Replies</th>
-                  <th className="text-left px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Last Sent</th>
+                  <th className="text-left px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Account</th>
+                  <th className="text-left px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Warmup</th>
+                  <th className="text-center px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Today / Target</th>
+                  <th className="text-center px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Target/day</th>
+                  <th className="text-center px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Replies</th>
+                  <th className="text-left px-3 py-3 font-mono text-[10px] text-prospex-dim uppercase">Last sent</th>
                   <th className="px-3 py-3"></th>
                 </tr>
               </thead>
               <tbody>
                 {accounts.map(a => {
+                  const w = a.warmup;
                   const used = a.daily_sent_today || 0;
-                  const limit = a.daily_limit || 30;
-                  const pct = Math.min(100, Math.round((used / limit) * 100));
+                  const target = w?.effective_target ?? (a.daily_target || 30);
+                  const hardCap = w?.hard_limit ?? (a.daily_limit || 30);
+                  const pct = target > 0 ? Math.min(100, Math.round((used / target) * 100)) : 0;
+                  const stage = w?.stage || 'warm';
+                  const stageBadge = {
+                    new:     { icon: <Snowflake className="w-3 h-3" />, cls: 'text-prospex-dim border-prospex-border',       label: 'not started' },
+                    warming: { icon: <Flame className="w-3 h-3" />,     cls: 'text-amber-400 border-amber-500/40',           label: `warming · day ${w?.days_in_warmup ?? 0}` },
+                    warm:    { icon: <Flame className="w-3 h-3" />,     cls: 'text-prospex-green border-prospex-green/40',   label: 'fully warm' },
+                    paused:  { icon: <Pause className="w-3 h-3" />,     cls: 'text-prospex-red border-prospex-red/40',       label: 'paused' },
+                  }[stage];
                   return (
-                    <tr key={a.id} className="table-row">
+                    <tr key={a.id} className="table-row align-top">
                       <td className="px-3 py-2.5">
                         <p className="text-prospex-text font-mono">@{a.username}</p>
                         {a.display_name && <p className="text-[10px] text-prospex-dim">{a.display_name}</p>}
-                      </td>
-                      <td className="px-3 py-2.5 text-center">
-                        <select value={a.status || 'active'} onChange={e => handleStatus(a, e.target.value)} className="input text-[10px] py-1 px-2 w-auto">
+                        <select value={a.status || 'active'} onChange={e => handleStatus(a, e.target.value)} className="input text-[9px] py-0.5 px-1.5 mt-1 w-auto">
                           <option value="active">active</option>
                           <option value="warming">warming</option>
                           <option value="paused">paused</option>
                           <option value="resting">resting</option>
                         </select>
                       </td>
-                      <td className="px-3 py-2.5 text-center">
-                        <p className="text-prospex-text font-mono">{used} / {limit}</p>
-                        <div className="w-full bg-prospex-bg rounded-full h-1 mt-1">
-                          <div className={cn('h-1 rounded-full', pct >= 100 ? 'bg-prospex-red' : pct >= 80 ? 'bg-amber-400' : 'bg-prospex-cyan')} style={{ width: `${pct}%` }} />
+                      <td className="px-3 py-2.5">
+                        <div className="space-y-1.5">
+                          <span className={cn('inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border', stageBadge.cls)}>
+                            {stageBadge.icon} {stageBadge.label}
+                          </span>
+                          <p className="text-[9px] text-prospex-dim leading-tight">{w?.procedure_step || `Target ${target}/day`}</p>
+                          {w?.next_step_target && w?.next_step_at && (
+                            <p className="text-[9px] text-prospex-cyan flex items-center gap-1">
+                              <Clock className="w-2.5 h-2.5" /> → {w.next_step_target}/day on {new Date(w.next_step_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                            </p>
+                          )}
                         </div>
                       </td>
-                      <td className="px-3 py-2.5 text-center text-prospex-text font-mono">{a.total_sent || 0}</td>
+                      <td className="px-3 py-2.5 text-center">
+                        <p className="text-prospex-text font-mono">{used} / {target} <span className="text-prospex-dim text-[9px]">· cap {hardCap}</span></p>
+                        <div className="w-full bg-prospex-bg rounded-full h-1 mt-1">
+                          <div className={cn('h-1 rounded-full', pct >= 100 ? 'bg-prospex-green' : pct >= 80 ? 'bg-prospex-cyan' : 'bg-prospex-cyan/60')} style={{ width: `${pct}%` }} />
+                        </div>
+                        <p className="text-[9px] text-prospex-dim mt-0.5">{pct}% of target</p>
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <input type="number" min={0} max={hardCap} defaultValue={a.daily_target || 30}
+                          onBlur={e => {
+                            const v = parseInt(e.target.value);
+                            if (!isNaN(v) && v !== (a.daily_target || 30)) handleTargetChange(a, v);
+                          }}
+                          className="input text-[10px] py-0.5 px-2 w-14 text-center" />
+                        <p className="text-[9px] text-prospex-dim mt-0.5">total {a.total_sent || 0}</p>
+                      </td>
                       <td className="px-3 py-2.5 text-center text-prospex-green font-mono">{a.total_replies || 0}</td>
                       <td className="px-3 py-2.5 text-prospex-dim text-[10px] font-mono">{a.last_sent_at ? new Date(a.last_sent_at).toLocaleString() : '—'}</td>
                       <td className="px-3 py-2.5 text-right">
-                        <button onClick={() => handleRemove(a)} className="text-prospex-dim hover:text-prospex-red"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <div className="flex items-center justify-end gap-1">
+                          {stage === 'new' && (
+                            <button onClick={() => handleWarmup(a, 'start_warmup')} className="text-[10px] font-mono text-prospex-cyan hover:text-prospex-text px-1.5 py-1 rounded border border-prospex-cyan/40" title="Begin 14-day ramp">
+                              <Flame className="w-3 h-3 inline mr-1" />Start
+                            </button>
+                          )}
+                          {stage === 'warming' && (w?.fully_warm || (w?.days_in_warmup ?? 0) >= 14) && (
+                            <button onClick={() => handleWarmup(a, 'graduate')} className="text-[10px] font-mono text-prospex-green hover:text-prospex-text px-1.5 py-1 rounded border border-prospex-green/40" title="14 days complete">
+                              <GraduationCap className="w-3 h-3 inline mr-1" />Graduate
+                            </button>
+                          )}
+                          {(stage === 'warming' || stage === 'warm') && (
+                            <button onClick={() => handleWarmup(a, 'pause')} className="text-prospex-dim hover:text-amber-400" title="Pause"><Pause className="w-3.5 h-3.5" /></button>
+                          )}
+                          {stage === 'paused' && (
+                            <button onClick={() => handleWarmup(a, 'resume')} className="text-prospex-dim hover:text-prospex-green" title="Resume"><Play className="w-3.5 h-3.5" /></button>
+                          )}
+                          <button onClick={() => handleRemove(a)} className="text-prospex-dim hover:text-prospex-red" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
+                        </div>
                       </td>
                     </tr>
                   );
