@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
 import { authOr401 } from "@/lib/api-auth";
+import { parseCityFromAddress, findCountyForCity } from "@/lib/parse-location";
 
 function getKey(envKey: string): string { return process.env[envKey] || ''; }
 
@@ -155,10 +156,15 @@ async function scrapeGoogleMapsOutscraper(niche: string, location: string, count
     const socialLinks = Array.isArray(item.social_links) ? (item.social_links as string[]) : [];
     const igFromSocial = socialLinks.find(l => typeof l === 'string' && l.includes('instagram.com')) || null;
     const igFromField = typeof item.instagram === 'string' ? item.instagram : null;
+    const parsedAddress = item.full_address ? String(item.full_address) : (item.address ? String(item.address) : null);
+    // Prefer city parsed from the actual returned address — the API's `item.city`
+    // is unreliable (often empty) and `location` is just our search term, which
+    // wrongly tags e.g. London clinics with "dorset" when we search Dorset.
+    const derivedCity = parseCityFromAddress(parsedAddress, item.city ? String(item.city) : location);
     return {
       business_name: String(item.name || 'Unknown'),
-      address: item.full_address ? String(item.full_address) : (item.address ? String(item.address) : null),
-      city: item.city ? String(item.city) : location,
+      address: parsedAddress,
+      city: derivedCity,
       country: item.country ? String(item.country) : country,
       phone: phoneRaw ? String(phoneRaw) : null,
       email: typeof emailRaw === 'string' ? emailRaw : null,
@@ -212,10 +218,12 @@ async function scrapeGoogleMapsApify(niche: string, location: string, country: s
     const website = item.website || item.url;
     const emails = Array.isArray(item.emails) ? item.emails : [];
 
+    const apifyAddress = item.address ? String(item.address) : null;
+    const apifyCity = parseCityFromAddress(apifyAddress, item.city ? String(item.city) : location);
     return {
       business_name: String(item.title || 'Unknown'),
-      address: item.address ? String(item.address) : null,
-      city: item.city ? String(item.city) : location,
+      address: apifyAddress,
+      city: apifyCity,
       country: item.countryCode ? String(item.countryCode) : country,
       phone: phoneRaw ? String(phoneRaw) : null,
       email: emails.length > 0 ? String(emails[0]) : null,
@@ -830,11 +838,13 @@ export async function PUT(request: NextRequest) {
 
       if (existing) { skipped++; continue; }
 
+      const derivedCounty = lead.city ? findCountyForCity(lead.city) : null;
       const { error } = await supabase.from('leads').insert({
         business_name: lead.business_name,
         niche: lead.niche || niche || null,
         address: lead.address || null,
         city: lead.city || null,
+        county: derivedCounty,
         country: lead.country || country || null,
         phone: lead.phone || null,
         email: lead.email || null,

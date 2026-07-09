@@ -59,6 +59,7 @@ export default function LeadsPage() {
   const [nicheFilter, setNicheFilter] = useState('');
   const [countryFilter, setCountryFilter] = useState('');
   const [cityFilter, setCityFilter] = useState('');
+  const [countyFilter, setCountyFilter] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [msgOpen, setMsgOpen] = useState(false);
   const [msgChannel, setMsgChannel] = useState<'whatsapp' | 'instagram'>('whatsapp');
@@ -71,6 +72,7 @@ export default function LeadsPage() {
   const [uniqueNiches, setUniqueNiches] = useState<string[]>([]);
   const [uniqueCountries, setUniqueCountries] = useState<string[]>([]);
   const [uniqueCities, setUniqueCities] = useState<string[]>([]);
+  const [uniqueCounties, setUniqueCounties] = useState<string[]>([]);
 
   // ─── Device / machine filter ─────────────────────────────
   interface DeviceOption { device_name: string; tier: 'A' | 'B' | 'C'; }
@@ -94,6 +96,10 @@ export default function LeadsPage() {
       const { data: cityData } = await supabase.from('leads').select('city').not('city', 'is', null);
       const citiesList = [...new Set((cityData || []).map(d => d.city).filter(Boolean))].sort();
       setUniqueCities(citiesList);
+
+      const { data: countyData } = await supabase.from('leads').select('county').not('county', 'is', null);
+      const countiesList = [...new Set((countyData || []).map(d => d.county).filter(Boolean))].sort();
+      setUniqueCounties(countiesList);
 
       // Devices from the seeded dictionary — Tier A/B are worth filtering on
       const { data: devData } = await supabase.from('device_keywords').select('device_name, tier').eq('active', true).in('tier', ['A', 'B']).order('tier').order('device_name');
@@ -137,6 +143,7 @@ export default function LeadsPage() {
       if (nicheFilter) query = query.eq('niche', nicheFilter);
       if (countryFilter) query = query.eq('country', countryFilter);
       if (cityFilter) query = query.eq('city', cityFilter);
+      if (countyFilter) query = query.eq('county', countyFilter);
       // Device filter — apply the pre-resolved id mask
       if (deviceIdMask) {
         const ids = Array.from(deviceIdMask);
@@ -151,7 +158,7 @@ export default function LeadsPage() {
       setTotalCount(count || 0);
     } catch (error) { console.error('Failed to fetch leads:', error); }
     finally { setLoading(false); }
-  }, [sort, filter, page, nicheFilter, countryFilter, cityFilter, deviceIdMask]);
+  }, [sort, filter, page, nicheFilter, countryFilter, cityFilter, countyFilter, deviceIdMask]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
 
@@ -181,12 +188,13 @@ export default function LeadsPage() {
     setNicheFilter('');
     setCountryFilter('');
     setCityFilter('');
+    setCountyFilter('');
     setDeviceFilter([]);
     setDeviceTierFilter('');
     setPage(0);
   };
 
-  const activeFilterCount = [filter.source, filter.priority, nicheFilter, countryFilter, cityFilter, deviceTierFilter, deviceFilter.length > 0 ? 'devices' : null].filter(Boolean).length;
+  const activeFilterCount = [filter.source, filter.priority, nicheFilter, countryFilter, cityFilter, countyFilter, deviceTierFilter, deviceFilter.length > 0 ? 'devices' : null].filter(Boolean).length;
 
   const toggleDeviceInFilter = (name: string) => {
     setDeviceFilter(prev => prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name]);
@@ -308,6 +316,15 @@ export default function LeadsPage() {
                 {uniqueCities.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
+            {uniqueCounties.length > 0 && (
+              <div className="flex items-center gap-1.5" title="UK county rollup — e.g. 'Dorset' matches Bournemouth, Poole, Dorchester etc.">
+                <MapPin className="w-3.5 h-3.5 text-prospex-cyan" />
+                <select value={countyFilter} onChange={(e) => { setCountyFilter(e.target.value); setPage(0); }} className="input w-auto text-xs py-1.5">
+                  <option value="">All Counties (UK)</option>
+                  {uniqueCounties.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
             <div className="flex items-center gap-1.5">
               <Database className="w-3.5 h-3.5 text-prospex-dim" />
               <select value={filter.source || ''} onChange={(e) => { setFilter(prev => ({ ...prev, source: e.target.value || null })); setPage(0); }} className="input w-auto text-xs py-1.5">
