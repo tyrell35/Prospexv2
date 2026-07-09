@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Send, Shield, Settings, Menu, X, LogOut, Rocket, Clock, Target } from 'lucide-react';
+import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Send, Shield, Settings, Menu, X, LogOut, Rocket, Clock, Target, Trophy } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth-context';
 
@@ -16,6 +16,7 @@ const navigation = [
   { name: 'Market Analysis', href: '/market-analysis', icon: BarChart3 },
   { name: 'Deep Audit / Pitch', href: '/pitch', icon: Shield },
   { name: 'Outreach Pipeline', href: '/outreach-pipeline', icon: Send },
+  { name: 'Scorecard', href: '/outreach-scorecard', icon: Trophy },
   { name: 'Follow-Ups', href: '/follow-ups', icon: Clock },
   { name: 'DM Campaigns', href: '/dm-campaigns', icon: Rocket },
   { name: 'Outreach Coach', href: '/outreach-coach', icon: GraduationCap },
