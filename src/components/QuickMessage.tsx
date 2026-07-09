@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { X, MessageCircle, Instagram, Copy, ExternalLink, Check, ChevronDown, Send, Sparkles, BookOpen } from 'lucide-react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import { X, MessageCircle, Instagram, Copy, Check, ChevronDown, Send, BookOpen, Loader2 } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 import SendConfirmModal from './SendConfirmModal';
 
 // ─── TYPES ──────────────────────────────────────────────────
+
 interface QuickMessageProps {
  isOpen: boolean;
  onClose: () => void;
@@ -15,77 +17,156 @@ interface QuickMessageProps {
   phone?: string | null;
   instagram_url?: string | null;
   city?: string | null;
+  niche?: string | null;
   google_rating?: number | null;
   google_review_count?: number | null;
   website?: string | null;
+  audit_score?: number | null;
  };
 }
 
-interface QuickTemplate {
+interface DbTemplate {
  id: string;
  name: string;
- stage: string;
- message: string;
+ category: string | null;
+ content: string;
+ channel: string | null;
 }
 
-const QUICK_TEMPLATES: QuickTemplate[] = [
- { id: 'cold-1', name: 'Casual Question Opener', stage: 'Cold Open', message: `Hey {{firstName}} 👋 quick question — are you currently running any paid ads for {{clinicName}} or relying mostly on word of mouth and organic?` },
- { id: 'cold-2', name: 'Compliment + Curiosity', stage: 'Cold Open', message: `Hey! Just came across {{clinicName}} — your {{specificThing}} looks amazing. Quick question, are you actively looking to bring in more {{treatmentType}} bookings or are you at capacity right now?` },
- { id: 'cold-3', name: 'Competitor Insight', stage: 'Cold Open', message: `Hey {{firstName}} — I noticed a few clinics near {{city}} are running some really aggressive ad campaigns right now. I've got some intel on what's working for them. Worth sharing?` },
- { id: 'cold-4', name: 'Google Reviews Opener', stage: 'Cold Open', message: `Hey {{firstName}} — noticed {{clinicName}} has {{reviewCount}} Google reviews which is solid. Have you thought about turning those into a client-generating machine? A lot of clinics with similar reviews are getting 30-50 new enquiries/month from it.` },
- { id: 'fu-1', name: 'Value Drop (Audit)', stage: 'Follow-Up', message: `Hey {{firstName}} — I actually ran a quick check on {{clinicName}}'s online presence and found a few things that might be costing you new bookings. Nothing major to fix but the impact could be significant. Want me to send over what I found?` },
- { id: 'fu-2', name: 'Case Study Drop', stage: 'Follow-Up', message: `Hey {{firstName}} — just wanted to share a quick result. We helped a {{niche}} in {{city}} go from 12 to 47 new enquiries per month in 6 weeks. Similar size to {{clinicName}}. Would the strategy behind that be useful for you?` },
- { id: 'breakup', name: 'Breakup Message', stage: 'Breakup', message: `Hey {{firstName}} — I've reached out a couple of times and I get it, you're probably flat out. I'll close your file on my end. If you ever want to explore getting more {{treatmentType}} clients, I'm here. No hard feelings either way 👊` },
- { id: 'objection-busy', name: 'Handle: Too Busy', stage: 'Objection', message: `Totally get it — if you're busy that's actually a good sign! What if I just sent you a 2-min video showing exactly what we'd do? No call needed. If it makes sense, great. If not, no worries at all.` },
- { id: 'objection-agency', name: 'Handle: Have Agency', stage: 'Objection', message: `Nice, good to hear you're investing in marketing. Genuine question — are you happy with the results you're getting? A lot of people I speak to have an agency but aren't seeing the ROI they expected.` },
- { id: 'booking', name: '2-Option Close', stage: 'Booking', message: `Brilliant — let's get something in. I've got a 15-min slot free {{option1}} or {{option2}}. Which works better for you?` },
- { id: 'reactivation', name: 'Circle Back', stage: 'Reactivation', message: `Hey {{firstName}} — we chatted a while back about {{clinicName}}. Since then we've developed some new strategies that are working really well for {{niche}} in {{city}}. Worth a quick chat to see if it's relevant?` },
- { id: 'custom', name: 'Write Custom Message', stage: 'Custom', message: '' },
-];
+// A synthetic entry that always appears first — clears the editor for a
+// custom message. Matches the pattern used in the lead detail template picker.
+const CUSTOM_TEMPLATE: DbTemplate = {
+ id: 'custom',
+ name: '✍️ Write Custom Message',
+ category: 'custom',
+ content: '',
+ channel: null,
+};
+
+// Display helpers ────────────────────────────────────────────
+const CATEGORY_LABEL: Record<string, string> = {
+ all: 'All',
+ custom: '✍️ Custom',
+ cold_open: 'Cold Open',
+ gift_leads: 'Gift Leads',
+ follow_up: 'Follow-Up',
+ objection: 'Objection',
+ booking: 'Booking',
+ closing: 'Closing',
+ case_study: 'Case Study',
+ social_proof: 'Social Proof',
+ greeting: 'Greeting',
+ qualifying: 'Qualifying',
+ general: 'General',
+ sms_sequence: 'SMS Sequence',
+ top_tier_no_ads: '👑 Elite · No Ads',
+ top_tier_with_ads: '👑 Elite · Live Ads',
+ top_tier_multi_device: '👑 Multi-Device',
+};
+
+function categoryLabel(c: string | null): string {
+ if (!c) return 'General';
+ return CATEGORY_LABEL[c] || c.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
 
 // ─── COMPONENT ──────────────────────────────────────────────
+
 export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMessageProps) {
- const [selectedTemplate, setSelectedTemplate] = useState<string>('cold-1');
+ const [templates, setTemplates] = useState<DbTemplate[]>([]);
+ const [templatesLoading, setTemplatesLoading] = useState(false);
+ const [selectedTemplateId, setSelectedTemplateId] = useState<string>('custom');
+ const [categoryFilter, setCategoryFilter] = useState<string>('all');
  const [message, setMessage] = useState('');
  const [copied, setCopied] = useState(false);
  const [sent, setSent] = useState(false);
  const [showTemplates, setShowTemplates] = useState(false);
+ const [confirmOpen, setConfirmOpen] = useState(false);
 
- // Auto-fill template with lead data
- const fillTemplate = useCallback((templateMessage: string) => {
-  let filled = templateMessage;
+ // Load templates from the SAME conversation_templates table the lead detail
+ // page uses. Matches on channel (instagram / whatsapp / all).
+ useEffect(() => {
+  if (!isOpen) return;
+  let cancelled = false;
+  setTemplatesLoading(true);
+  (async () => {
+   const { data } = await supabase
+    .from('conversation_templates')
+    .select('id, name, category, content, channel')
+    .eq('is_active', true)
+    .or(`channel.eq.${channel},channel.eq.all`)
+    .order('category', { ascending: true });
+   if (!cancelled) {
+    setTemplates((data || []) as DbTemplate[]);
+    setTemplatesLoading(false);
+   }
+  })();
+  return () => { cancelled = true; };
+ }, [isOpen, channel]);
+
+ // Same personalisation function as the lead detail template picker.
+ // Supports both {{firstName}} and {{first_name}} styles for compatibility
+ // with older templates and the DM Campaign presets.
+ const personalize = useCallback((content: string): string => {
   const firstName = lead.business_name?.split(/[\s\-&]/)[0] || 'there';
-  filled = filled.replace(/\{\{firstName\}\}/g, firstName);
-  filled = filled.replace(/\{\{clinicName\}\}/g, lead.business_name || 'your clinic');
-  filled = filled.replace(/\{\{city\}\}/g, lead.city || 'your area');
-  filled = filled.replace(/\{\{reviewCount\}\}/g, String(lead.google_review_count || 'great'));
-  filled = filled.replace(/\{\{niche\}\}/g, 'clinic');
-  filled = filled.replace(/\{\{specificThing\}\}/g, 'treatment menu');
-  filled = filled.replace(/\{\{treatmentType\}\}/g, 'treatment');
-  filled = filled.replace(/\{\{option1\}\}/g, 'Tuesday at 11am');
-  filled = filled.replace(/\{\{option2\}\}/g, 'Thursday at 2pm');
-  return filled;
+  return content
+   .replace(/\{\{firstName\}\}/g, firstName)
+   .replace(/\{\{first_name\}\}/g, firstName)
+   .replace(/\{\{clinicName\}\}/g, lead.business_name || 'your clinic')
+   .replace(/\{\{business_name\}\}/g, lead.business_name || 'your business')
+   .replace(/\{\{city\}\}/g, lead.city || 'your area')
+   .replace(/\{\{niche\}\}/g, lead.niche || 'aesthetic treatments')
+   .replace(/\{\{treatment\}\}/g, lead.niche || 'aesthetic treatments')
+   .replace(/\{\{treatmentType\}\}/g, lead.niche || 'treatment')
+   .replace(/\{\{their_reviews\}\}/g, String(lead.google_review_count || ''))
+   .replace(/\{\{reviewCount\}\}/g, String(lead.google_review_count || 'great'))
+   .replace(/\{\{review_count\}\}/g, String(lead.google_review_count || ''))
+   .replace(/\{\{rating\}\}/g, String(lead.google_rating || ''))
+   .replace(/\{\{website_score\}\}/g, String(lead.audit_score || ''))
+   .replace(/\{\{load_time\}\}/g, '4.5')
+   .replace(/\{\{specificThing\}\}/g, 'treatment menu')
+   .replace(/\{\{day\}\}/g, 'Tuesday')
+   .replace(/\{\{time\}\}/g, '2pm')
+   .replace(/\{\{day1\}\}/g, 'Tuesday')
+   .replace(/\{\{time1\}\}/g, '11am')
+   .replace(/\{\{day2\}\}/g, 'Thursday')
+   .replace(/\{\{time2\}\}/g, '2pm')
+   .replace(/\{\{option1\}\}/g, 'Tuesday at 11am')
+   .replace(/\{\{option2\}\}/g, 'Thursday at 2pm')
+   .replace(/\{\{booking_link\}\}/g, 'book.infinityclients.com')
+   .replace(/\{\{top_device\}\}/g, '')
+   .replace(/\{\{device_list\}\}/g, '');
  }, [lead]);
 
- // Set initial message when opening
+ // Reset the editor when the modal opens or channel changes.
  useEffect(() => {
-  if (isOpen) {
-   const tmpl = QUICK_TEMPLATES.find(t => t.id === selectedTemplate);
-   if (tmpl && tmpl.id !== 'custom') {
-    setMessage(fillTemplate(tmpl.message));
-   }
-   setCopied(false);
-   setSent(false);
-  }
- }, [isOpen, selectedTemplate, fillTemplate]);
+  if (!isOpen) return;
+  setSelectedTemplateId('custom');
+  setMessage('');
+  setCopied(false);
+  setSent(false);
+  setCategoryFilter('all');
+ }, [isOpen, channel]);
 
- const handleSelectTemplate = (id: string) => {
-  setSelectedTemplate(id);
-  const tmpl = QUICK_TEMPLATES.find(t => t.id === id);
-  if (tmpl && tmpl.id !== 'custom') {
-   setMessage(fillTemplate(tmpl.message));
-  } else {
+ // Combined list (custom always first) + filter chips derived from what
+ // actually loaded so we never show an empty category.
+ const allTemplates = useMemo(() => [CUSTOM_TEMPLATE, ...templates], [templates]);
+ const categories = useMemo(() => {
+  const set = new Set<string>();
+  for (const t of templates) if (t.category) set.add(t.category);
+  return Array.from(set).sort();
+ }, [templates]);
+ const visible = useMemo(() =>
+  // Custom always shows regardless of filter
+  allTemplates.filter(t => t.id === 'custom' || categoryFilter === 'all' || t.category === categoryFilter)
+ , [allTemplates, categoryFilter]);
+ const currentTemplate = allTemplates.find(t => t.id === selectedTemplateId);
+
+ const selectTemplate = (t: DbTemplate) => {
+  setSelectedTemplateId(t.id);
+  if (t.id === 'custom') {
    setMessage('');
+  } else {
+   setMessage(personalize(t.content));
   }
   setShowTemplates(false);
  };
@@ -96,8 +177,6 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
   setTimeout(() => setCopied(false), 2000);
  };
 
- const [confirmOpen, setConfirmOpen] = useState(false);
-
  const handleSend = () => {
   if (channel === 'whatsapp') {
    const phone = lead.phone?.replace(/[^0-9+]/g, '').replace('+', '') || '';
@@ -105,22 +184,26 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
    const encoded = encodeURIComponent(message);
    window.open(`https://wa.me/${phone}?text=${encoded}`, '_blank');
   } else {
-   // Instagram — open DM inbox + copy message
    const handle = lead.instagram_url?.replace(/https?:\/\/(www\.)?instagram\.com\/?/, '').replace(/\/$/, '') || '';
    navigator.clipboard.writeText(message);
    setCopied(true);
-   if (handle) {
-    window.open(`https://ig.me/m/${handle}`, '_blank');
-   } else if (lead.instagram_url) {
-    window.open(lead.instagram_url, '_blank');
-   }
+   if (handle) window.open(`https://ig.me/m/${handle}`, '_blank');
+   else if (lead.instagram_url) window.open(lead.instagram_url, '_blank');
   }
   setSent(true);
-  // Pop the confirmation modal — only writes to outreach_logs on user confirm.
   if (lead.id) setConfirmOpen(true);
  };
 
- const currentTemplate = QUICK_TEMPLATES.find(t => t.id === selectedTemplate);
+ // Map DB category → outreach_log stage
+ const stageForLog = (): string => {
+  const cat = currentTemplate?.category || 'cold_open';
+  if (cat.startsWith('top_tier_')) return 'cold_open';
+  if (cat === 'follow_up') return 'follow_up_1';
+  if (cat === 'objection') return 'objection';
+  if (cat === 'booking') return 'booking';
+  return cat;
+ };
+
  const wordCount = message.trim().split(/\s+/).filter(Boolean).length;
  const charCount = message.length;
  const instagramHandle = lead.instagram_url?.replace(/https?:\/\/(www\.)?instagram\.com\/?/, '').replace(/\/$/, '') || '';
@@ -146,8 +229,7 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
        <p className="text-[10px] text-prospex-muted">
         {channel === 'whatsapp'
          ? `To: ${lead.phone || 'No phone number'}`
-         : `To: @${instagramHandle || 'No handle'}`
-        }
+         : `To: @${instagramHandle || 'No handle'}`}
        </p>
       </div>
      </div>
@@ -165,23 +247,63 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
      </div>
     </div>
 
+    {/* Category filter chips — only render if we have >6 templates so tiny pools stay simple */}
+    {categories.length > 0 && templates.length > 6 && (
+     <div className="px-4 pt-3 flex items-center gap-1 flex-wrap">
+      <button
+       onClick={() => setCategoryFilter('all')}
+       className={`text-[10px] px-2 py-0.5 rounded-full font-mono transition-colors ${
+        categoryFilter === 'all'
+         ? 'bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/30'
+         : 'bg-prospex-bg text-prospex-dim hover:text-prospex-text'
+       }`}
+      >All</button>
+      {categories.map(cat => (
+       <button key={cat}
+        onClick={() => setCategoryFilter(cat)}
+        className={`text-[10px] px-2 py-0.5 rounded-full font-mono transition-colors ${
+         categoryFilter === cat
+          ? 'bg-prospex-cyan/20 text-prospex-cyan border border-prospex-cyan/30'
+          : 'bg-prospex-bg text-prospex-dim hover:text-prospex-text'
+        }`}
+       >{categoryLabel(cat)}</button>
+      ))}
+     </div>
+    )}
+
     {/* Template Picker */}
     <div className="px-4 pt-3 pb-2">
      <div className="relative">
-      <button onClick={() => setShowTemplates(!showTemplates)} className="w-full flex items-center justify-between px-3 py-2 bg-prospex-bg border border-prospex-border rounded-lg text-sm text-white hover:border-prospex-cyan/40 transition-colors">
-       <span className="flex items-center gap-2">
-        <BookOpen className="w-3.5 h-3.5 text-prospex-cyan" />
-        <span className="text-prospex-muted text-xs mr-1">{currentTemplate?.stage}:</span>
-        {currentTemplate?.name || 'Select Template'}
+      <button onClick={() => setShowTemplates(!showTemplates)}
+       className="w-full flex items-center justify-between px-3 py-2 bg-prospex-bg border border-prospex-border rounded-lg text-sm text-white hover:border-prospex-cyan/40 transition-colors"
+      >
+       <span className="flex items-center gap-2 min-w-0">
+        <BookOpen className="w-3.5 h-3.5 text-prospex-cyan shrink-0" />
+        {templatesLoading ? (
+         <span className="text-prospex-muted text-xs">Loading templates…</span>
+        ) : (
+         <>
+          <span className="text-prospex-muted text-xs mr-1">{categoryLabel(currentTemplate?.category ?? null)}:</span>
+          <span className="truncate">{currentTemplate?.name || 'Select Template'}</span>
+         </>
+        )}
        </span>
-       <ChevronDown className={`w-4 h-4 text-prospex-muted transition-transform ${showTemplates ? 'rotate-180' : ''}`} />
+       <ChevronDown className={`w-4 h-4 text-prospex-muted transition-transform shrink-0 ${showTemplates ? 'rotate-180' : ''}`} />
       </button>
 
       {showTemplates && (
-       <div className="absolute top-full left-0 right-0 mt-1 bg-prospex-surface border border-prospex-border rounded-lg shadow-xl z-10 max-h-64 overflow-y-auto">
-        {QUICK_TEMPLATES.map(t => (
-         <button key={t.id} onClick={() => handleSelectTemplate(t.id)} className={`w-full text-left px-3 py-2 text-xs hover:bg-prospex-bg transition-colors flex items-center gap-2 ${selectedTemplate === t.id ? 'bg-prospex-cyan/10 text-prospex-cyan' : 'text-white'}`}>
-          <span className="text-[10px] text-prospex-muted w-16 shrink-0">{t.stage}</span>
+       <div className="absolute top-full left-0 right-0 mt-1 bg-prospex-surface border border-prospex-border rounded-lg shadow-xl z-10 max-h-72 overflow-y-auto">
+        {templatesLoading ? (
+         <div className="p-3 text-center"><Loader2 className="w-4 h-4 animate-spin text-prospex-dim mx-auto" /></div>
+        ) : visible.length === 0 ? (
+         <p className="p-3 text-center text-xs text-prospex-dim">No templates match this filter.</p>
+        ) : visible.map(t => (
+         <button key={t.id} onClick={() => selectTemplate(t)}
+          className={`w-full text-left px-3 py-2 text-xs hover:bg-prospex-bg transition-colors flex items-center gap-2 ${
+           selectedTemplateId === t.id ? 'bg-prospex-cyan/10 text-prospex-cyan' : 'text-white'
+          }`}
+         >
+          <span className="text-[10px] text-prospex-muted w-24 shrink-0 truncate">{categoryLabel(t.category)}</span>
           <span className="truncate">{t.name}</span>
          </button>
         ))}
@@ -197,7 +319,7 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
       onChange={e => setMessage(e.target.value)}
       rows={6}
       className="w-full px-3 py-2.5 bg-prospex-bg border border-prospex-border rounded-lg text-sm text-white placeholder:text-prospex-muted focus:outline-none focus:border-prospex-cyan resize-none"
-      placeholder="Type your message..."
+      placeholder={selectedTemplateId === 'custom' ? 'Type your custom message…' : 'Type your message…'}
      />
      <div className="flex items-center justify-between mt-1.5">
       <div className="flex items-center gap-3">
@@ -205,6 +327,7 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
         {wordCount} words · {charCount} chars
        </span>
        {wordCount > 60 && <span className="text-[10px] text-red-400">Cold opens work best under 60 words</span>}
+       {message.includes('{{') && <span className="text-[10px] text-amber-400">⚠️ Unfilled variables</span>}
       </div>
       <button onClick={handleCopy} className="flex items-center gap-1 text-[10px] text-prospex-muted hover:text-white transition-colors">
        {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
@@ -262,27 +385,17 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
    </div>
   </div>
 
-  {/* Post-send confirmation modal — rendered AS SIBLING of the QuickMessage
-      backdrop (not a child) so it lives in its own stacking context and
-      clicks on its backdrop don't propagate up to close QuickMessage. */}
+  {/* Post-send confirmation modal — rendered AS SIBLING of QuickMessage
+      backdrop so its own stacking context isn't nested inside. */}
   <SendConfirmModal
    isOpen={confirmOpen}
    onClose={() => setConfirmOpen(false)}
    onLogged={() => { setConfirmOpen(false); onClose(); }}
    lead={lead.id ? { id: lead.id, business_name: lead.business_name } : null}
    channel={channel}
-   stage={(() => {
-    const tmpl = QUICK_TEMPLATES.find(t => t.id === selectedTemplate);
-    if (tmpl?.stage === 'Cold Open') return 'cold_open';
-    if (tmpl?.stage === 'Follow-Up') return 'follow_up_1';
-    if (tmpl?.stage === 'Breakup') return 'follow_up_3';
-    if (tmpl?.stage === 'Objection') return 'objection';
-    if (tmpl?.stage === 'Booking') return 'booking';
-    if (tmpl?.stage === 'Reactivation') return 'reactivation';
-    return 'cold_open';
-   })()}
+   stage={stageForLog()}
    messageSent={message}
-   templateName={QUICK_TEMPLATES.find(t => t.id === selectedTemplate)?.name}
+   templateName={currentTemplate?.name}
   />
   </>
  );
