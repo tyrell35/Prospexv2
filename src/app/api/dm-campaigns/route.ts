@@ -628,6 +628,7 @@ async function getAccounts() {
 interface ManageAccountsBody {
   sub_action?: string;
   username?: string;
+  usernames?: string[]; // batch add — added in the "get to 15 warm accounts" push
   display_name?: string;
   daily_limit?: number;
   daily_target?: number;
@@ -641,25 +642,69 @@ async function manageAccounts(body: ManageAccountsBody) {
   const { sub_action } = body;
 
   if (sub_action === 'add') {
-    if (!body.username) return NextResponse.json({ error: 'username required' }, { status: 400 });
-    // New accounts default to stage='new' — they don't send until warmup is
-    // explicitly started. That prevents the "created an account → auto-sent
-    // 30 cold DMs on day 1 → banned" failure mode.
-    const { data, error } = await supabase
-      .from('ig_accounts')
-      .insert({
-        username: body.username,
-        display_name: body.display_name || null,
-        daily_limit: body.daily_limit || 30,
-        daily_target: body.daily_target || 30,
-        warmup_stage: body.warmup_stage || 'new',
-        status: body.status || 'active',
-        notes: body.notes || null,
-      })
-      .select()
-      .single();
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-    return NextResponse.json({ success: true, account: data });
+    // Two modes: single username (legacy) or usernames[] (batch).
+    // Both share the same "new accounts default to stage='new'" safety —
+    // they can't send until warmup is explicitly started, which prevents
+    // "created 15 accounts → auto-sent 30 cold DMs from each on day 1 → banned"
+    const rawInputs: string[] = body.usernames && Array.isArray(body.usernames) && body.usernames.length > 0
+      ? body.usernames
+      : (body.username ? [body.username] : []);
+    if (rawInputs.length === 0) return NextResponse.json({ error: 'username or usernames[] required' }, { status: 400 });
+
+    // Normalise: trim, strip leading @, drop blanks, dedupe (case-insensitive)
+    const seen = new Set<string>();
+    const usernames = rawInputs
+      .map(u => (u || '').trim().replace(/^@/, ''))
+      .filter(u => u.length > 0)
+      .filter(u => {
+        const k = u.toLowerCase();
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    if (usernames.length === 0) return NextResponse.json({ error: 'no valid usernames after cleanup' }, { status: 400 });
+
+    // Find which already exist so we can report per-username outcomes
+    const { data: existing } = await supabase.from('ig_accounts').select('username').in('username', usernames);
+    const existingSet = new Set((existing || []).map(r => (r as { username: string }).username.toLowerCase()));
+
+    const toInsert = usernames.filter(u => !existingSet.has(u.toLowerCase())).map(u => ({
+      username: u,
+      display_name: body.display_name || null,
+      daily_limit: body.daily_limit || 30,
+      daily_target: body.daily_target || 30,
+      warmup_stage: body.warmup_stage || 'new',
+      status: body.status || 'active',
+      notes: body.notes || null,
+    }));
+
+    let inserted: unknown[] = [];
+    if (toInsert.length > 0) {
+      const { data, error } = await supabase.from('ig_accounts').insert(toInsert).select();
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+      inserted = data || [];
+    }
+
+    // Per-username report — helpful for the batch UI to show "N added, M skipped (duplicate)"
+    const results = usernames.map(u => ({
+      username: u,
+      status: existingSet.has(u.toLowerCase()) ? 'skipped_duplicate' as const : 'added' as const,
+    }));
+
+    // Legacy single-add response shape: `account`. Batch adds also include `results`.
+    if (rawInputs.length === 1) {
+      return NextResponse.json({
+        success: true,
+        account: (inserted[0] as unknown) || null,
+        skipped: results[0]?.status === 'skipped_duplicate',
+      });
+    }
+    return NextResponse.json({
+      success: true,
+      inserted_count: inserted.length,
+      skipped_count: results.filter(r => r.status === 'skipped_duplicate').length,
+      results,
+    });
   }
 
   if (sub_action === 'update') {

@@ -864,6 +864,10 @@ function AccountsTab() {
   const [newStage, setNewStage] = useState<'new' | 'warm'>('new');
   const [adding, setAdding] = useState(false);
   const [showProcedure, setShowProcedure] = useState(false);
+  // Batch add — paste multiple usernames, one per line or comma-separated
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchText, setBatchText] = useState('');
+  const [batchResult, setBatchResult] = useState<{ added: number; skipped: number; results: Array<{ username: string; status: 'added' | 'skipped_duplicate' }> } | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -889,6 +893,42 @@ function AccountsTab() {
     setNewDailyLimit(30);
     setNewDailyTarget(30);
     setNewStage('new');
+    setAdding(false);
+    refresh();
+  };
+
+  // Parse the pasted batch text into a clean array of handles.
+  // Accepts any of: one per line, comma-separated, semicolon-separated, or
+  // whitespace-separated. Strips @, trims, dedupes.
+  const parsedBatch = batchText
+    .split(/[\s,;]+/)
+    .map(s => s.trim().replace(/^@/, ''))
+    .filter(s => s.length > 0);
+  // Dedupe (client-side preview) — server dedupes too but this makes the
+  // count in the button accurate before submit.
+  const uniqueBatch = Array.from(new Set(parsedBatch.map(s => s.toLowerCase()))).map(k => parsedBatch.find(x => x.toLowerCase() === k) as string);
+
+  const handleBatchAdd = async () => {
+    if (uniqueBatch.length === 0) return;
+    setAdding(true);
+    setBatchResult(null);
+    const res = await api<{ success: boolean; inserted_count: number; skipped_count: number; results: Array<{ username: string; status: 'added' | 'skipped_duplicate' }> }>(
+      'manage_accounts',
+      {
+        sub_action: 'add',
+        usernames: uniqueBatch,
+        daily_limit: newDailyLimit,
+        daily_target: newDailyTarget,
+        warmup_stage: newStage,
+        status: 'active',
+      }
+    );
+    setBatchResult({
+      added: res.inserted_count || 0,
+      skipped: res.skipped_count || 0,
+      results: res.results || [],
+    });
+    setBatchText('');
     setAdding(false);
     refresh();
   };
@@ -966,31 +1006,110 @@ function AccountsTab() {
       </div>
 
       <div className="card p-4">
-        <h3 className="text-xs font-mono text-prospex-dim uppercase mb-3">Add Account</h3>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-          <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="@username (no @)" className="input md:col-span-2" />
-          <div>
-            <input type="number" min={1} value={newDailyTarget} onChange={e => setNewDailyTarget(parseInt(e.target.value) || 30)} placeholder="Target/day" className="input w-full" />
-            <p className="text-[9px] text-prospex-dim mt-0.5 px-1">KPI target</p>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-xs font-mono text-prospex-dim uppercase">Add Account</h3>
+          <div className="flex items-center gap-1">
+            <button onClick={() => { setBatchMode(false); setBatchResult(null); }}
+              className={cn('text-[10px] px-2 py-0.5 rounded font-mono border',
+                !batchMode ? 'bg-prospex-cyan/20 text-prospex-cyan border-prospex-cyan/40' : 'bg-prospex-bg text-prospex-dim border-prospex-border')}>
+              One
+            </button>
+            <button onClick={() => setBatchMode(true)}
+              className={cn('text-[10px] px-2 py-0.5 rounded font-mono border',
+                batchMode ? 'bg-prospex-cyan/20 text-prospex-cyan border-prospex-cyan/40' : 'bg-prospex-bg text-prospex-dim border-prospex-border')}>
+              📥 Batch
+            </button>
           </div>
-          <div>
-            <input type="number" min={1} value={newDailyLimit} onChange={e => setNewDailyLimit(parseInt(e.target.value) || 30)} placeholder="Hard cap" className="input w-full" />
-            <p className="text-[9px] text-prospex-dim mt-0.5 px-1">Hard ceiling</p>
-          </div>
-          <select value={newStage} onChange={e => setNewStage(e.target.value as 'new' | 'warm')} className="input">
-            <option value="new">🆕 New — needs warmup</option>
-            <option value="warm">🔥 Warm — skip ramp</option>
-          </select>
         </div>
-        <div className="flex items-center justify-between mt-3">
-          <p className="text-[10px] text-prospex-dim">
-            <Info className="w-2.5 h-2.5 inline mr-1" />
-            New accounts start with <strong>0 sends</strong> — hit &ldquo;Start warmup&rdquo; on the row to begin the 14-day ramp.
-          </p>
-          <button onClick={handleAdd} disabled={adding || !newUsername.trim()} className="btn-primary text-xs disabled:opacity-50">
-            {adding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Add
-          </button>
-        </div>
+
+        {!batchMode ? (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+              <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="@username (no @)" className="input md:col-span-2" />
+              <div>
+                <input type="number" min={1} value={newDailyTarget} onChange={e => setNewDailyTarget(parseInt(e.target.value) || 30)} placeholder="Target/day" className="input w-full" />
+                <p className="text-[9px] text-prospex-dim mt-0.5 px-1">KPI target</p>
+              </div>
+              <div>
+                <input type="number" min={1} value={newDailyLimit} onChange={e => setNewDailyLimit(parseInt(e.target.value) || 30)} placeholder="Hard cap" className="input w-full" />
+                <p className="text-[9px] text-prospex-dim mt-0.5 px-1">Hard ceiling</p>
+              </div>
+              <select value={newStage} onChange={e => setNewStage(e.target.value as 'new' | 'warm')} className="input">
+                <option value="new">🆕 New — needs warmup</option>
+                <option value="warm">🔥 Warm — skip ramp</option>
+              </select>
+            </div>
+            <div className="flex items-center justify-between mt-3">
+              <p className="text-[10px] text-prospex-dim">
+                <Info className="w-2.5 h-2.5 inline mr-1" />
+                New accounts start with <strong>0 sends</strong> — hit &ldquo;Start warmup&rdquo; on the row to begin the 14-day ramp.
+              </p>
+              <button onClick={handleAdd} disabled={adding || !newUsername.trim()} className="btn-primary text-xs disabled:opacity-50">
+                {adding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Add
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="space-y-2">
+              <label className="text-[10px] font-mono text-prospex-dim uppercase block">Paste usernames (one per line, or comma-separated)</label>
+              <textarea
+                value={batchText}
+                onChange={e => { setBatchText(e.target.value); setBatchResult(null); }}
+                rows={6}
+                placeholder="acme_beauty
+laser_pro_clinic
+@aesthetics_hub
+skinstudio_uk, glow_medspa; ultra_beauty"
+                className="w-full bg-prospex-bg border border-prospex-border rounded p-2 text-xs font-mono text-prospex-text resize-none focus:border-prospex-cyan/50 focus:outline-none"
+              />
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                <div>
+                  <input type="number" min={1} value={newDailyTarget} onChange={e => setNewDailyTarget(parseInt(e.target.value) || 30)} placeholder="Target/day" className="input w-full" />
+                  <p className="text-[9px] text-prospex-dim mt-0.5 px-1">Applies to every account in the batch</p>
+                </div>
+                <div>
+                  <input type="number" min={1} value={newDailyLimit} onChange={e => setNewDailyLimit(parseInt(e.target.value) || 30)} placeholder="Hard cap" className="input w-full" />
+                  <p className="text-[9px] text-prospex-dim mt-0.5 px-1">Hard ceiling per account</p>
+                </div>
+                <select value={newStage} onChange={e => setNewStage(e.target.value as 'new' | 'warm')} className="input">
+                  <option value="new">🆕 All start in 'new' (recommended — begin warmup after)</option>
+                  <option value="warm">🔥 All already warm (skip the 14-day ramp)</option>
+                </select>
+              </div>
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] text-prospex-dim">
+                  <Info className="w-2.5 h-2.5 inline mr-1" />
+                  {uniqueBatch.length} handle{uniqueBatch.length === 1 ? '' : 's'} detected
+                  {parsedBatch.length !== uniqueBatch.length && <> ({parsedBatch.length - uniqueBatch.length} duplicate{parsedBatch.length - uniqueBatch.length === 1 ? '' : 's'} in paste ignored)</>}.
+                  Existing @usernames will be skipped.
+                </p>
+                <button onClick={handleBatchAdd} disabled={adding || uniqueBatch.length === 0} className="btn-primary text-xs disabled:opacity-50">
+                  {adding ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />} Add {uniqueBatch.length} account{uniqueBatch.length === 1 ? '' : 's'}
+                </button>
+              </div>
+              {batchResult && (
+                <div className="p-2.5 bg-prospex-bg rounded border border-prospex-border">
+                  <p className="text-[11px] font-mono text-prospex-text mb-1.5">
+                    ✓ {batchResult.added} added
+                    {batchResult.skipped > 0 && <span className="text-amber-400"> · {batchResult.skipped} skipped (already exist)</span>}
+                  </p>
+                  {batchResult.results.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {batchResult.results.map(r => (
+                        <span key={r.username} className={cn('text-[9px] font-mono px-1.5 py-0.5 rounded border',
+                          r.status === 'added' ? 'bg-prospex-green/10 text-prospex-green border-prospex-green/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                        )}>
+                          {r.status === 'added' ? '✓' : '⚠'} @{r.username}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <div className="flex items-center justify-between">
