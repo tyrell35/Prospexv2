@@ -725,6 +725,20 @@ async function manageAccounts(body: ManageAccountsBody) {
     return NextResponse.json({ success: true, account: data });
   }
 
+  // Bulk start: flip every stage='new' active account to 'warming' at once.
+  // Handy after a batch-add so you don't click Start 15 times.
+  if (sub_action === 'start_warmup_all_new') {
+    const now = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('ig_accounts')
+      .update({ warmup_stage: 'warming', warmup_started_at: now, updated_at: now })
+      .eq('warmup_stage', 'new')
+      .eq('status', 'active')
+      .select('id, username');
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ success: true, started_count: (data || []).length, started: data || [] });
+  }
+
   // ─── Warmup lifecycle actions ────────────────────────
   if (sub_action === 'start_warmup') {
     if (!body.account_id) return NextResponse.json({ error: 'account_id required' }, { status: 400 });

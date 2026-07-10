@@ -950,6 +950,15 @@ function AccountsTab() {
     refresh();
   };
 
+  const newStageCount = accounts.filter(a => (a.warmup_stage || a.warmup?.stage) === 'new').length;
+  const handleStartAllNew = async () => {
+    if (newStageCount === 0) return;
+    if (!confirm(`Start the 14-day warmup on all ${newStageCount} 'new' account${newStageCount === 1 ? '' : 's'}?\n\nEach one begins Day 0 → 5 DMs/day for 3 days, then ramps 10 → 20 → 30.`)) return;
+    const res = await api<{ success: boolean; started_count: number }>('manage_accounts', { sub_action: 'start_warmup_all_new' });
+    refresh();
+    if (res.started_count > 0) alert(`✓ Started warmup on ${res.started_count} account${res.started_count === 1 ? '' : 's'}.`);
+  };
+
   const handleWarmup = async (account: IgAccount, sub_action: 'start_warmup' | 'graduate' | 'pause' | 'resume') => {
     const confirmMsg: Record<string, string> = {
       start_warmup: `Start 14-day warmup for @${account.username}? It'll send max 5/day for 3 days, then ramp: 10 → 20 → 30.`,
@@ -1112,9 +1121,16 @@ skinstudio_uk, glow_medspa; ultra_beauty"
         )}
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <button onClick={refresh} className="btn-ghost text-xs"><RefreshCw className="w-3.5 h-3.5" /> Refresh</button>
-        <button onClick={handleResetDaily} className="btn-ghost text-xs text-amber-400"><Activity className="w-3.5 h-3.5" /> Reset Daily Counters</button>
+        <div className="flex items-center gap-2">
+          {newStageCount > 0 && (
+            <button onClick={handleStartAllNew} className="text-xs px-3 py-1.5 rounded border border-prospex-cyan/40 bg-prospex-cyan/10 text-prospex-cyan hover:bg-prospex-cyan/20 font-mono flex items-center gap-1.5" title={`Start warmup on all ${newStageCount} accounts currently in stage='new'`}>
+              <Flame className="w-3.5 h-3.5" /> Start warmup on all {newStageCount} new
+            </button>
+          )}
+          <button onClick={handleResetDaily} className="btn-ghost text-xs text-amber-400"><Activity className="w-3.5 h-3.5" /> Reset Daily Counters</button>
+        </div>
       </div>
 
       {loading ? (
