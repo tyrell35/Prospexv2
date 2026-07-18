@@ -4,6 +4,7 @@ export interface Lead {
   niche: string | null;
   address: string | null;
   city: string | null;
+  county: string | null;
   country: string | null;
   phone: string | null;
   email: string | null;
@@ -259,6 +260,7 @@ export interface ScrapeResult {
   business_name: string;
   address: string | null;
   city: string | null;
+  county: string | null;
   country: string | null;
   phone: string | null;
   email: string | null;
