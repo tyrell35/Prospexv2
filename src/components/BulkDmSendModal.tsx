@@ -54,14 +54,25 @@ interface WarmAccount {
   daily_target: number | null;
   warmup_stage: 'new' | 'warming' | 'warm' | 'paused' | null;
   warmup_started_at: string | null;
+  notes: string | null; // free-text hint — e.g. "Chrome Profile 3" or "Mobile app slot 1"
 }
 
 interface QueueRow {
   lead: Lead;
   sender_account: string;
+  sender_notes: string | null; // for the "switch account" banner
   message: string;
   outcome: 'pending' | 'sent' | 'skipped' | 'blocked';
 }
+
+// How to distribute leads across warm IG accounts:
+//   round_robin — 1 from @a, 1 from @b, 1 from @c, back to @a (fair mix,
+//                 but forces an account switch on every send)
+//   grouped     — fill @a to its cap first, then @b, then @c
+//                 (15 switches for a 450-send day instead of 450)
+// Default is 'grouped' because for a 15-account fleet, switching accounts
+// in Instagram is by far the biggest per-lead friction — clustering wins.
+type SendOrder = 'round_robin' | 'grouped';
 
 type Channel = 'instagram' | 'whatsapp';
 
@@ -175,6 +186,12 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // WhatsApp-only: gap timer between sends (soft — displayed but not enforced)
   const [waLastSentAt, setWaLastSentAt] = useState<number | null>(null);
   const [waGapRemaining, setWaGapRemaining] = useState(0);
+  // IG send-order preference — persisted so operator's choice sticks across sessions
+  const [sendOrder, setSendOrder] = useState<SendOrder>('grouped');
+  // IG-only: has the operator confirmed they've switched to the current cluster's account?
+  // Reset whenever the cluster changes. Blocks Open-in-IG until acknowledged so nobody
+  // accidentally sends 30 messages from the wrong account.
+  const [switchAcknowledged, setSwitchAcknowledged] = useState(false);
 
   // ─── Load templates + (IG only) warm accounts ─────────────────
   useEffect(() => {
@@ -187,6 +204,12 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     setCustomTemplate('');
     setWaLastSentAt(null);
     setWaGapRemaining(0);
+    setSwitchAcknowledged(false);
+    // Restore preferred send order from localStorage — sticks across sessions
+    if (isIg && typeof window !== 'undefined') {
+      const saved = window.localStorage.getItem('prospex_send_order');
+      if (saved === 'round_robin' || saved === 'grouped') setSendOrder(saved);
+    }
     (async () => {
       setLoading(true);
       const channelFilter = isIg
@@ -195,7 +218,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
       const tplP = supabase.from('conversation_templates').select('id, name, category, content, channel')
         .eq('is_active', true).or(channelFilter).order('category');
       const accP = isIg
-        ? supabase.from('ig_accounts').select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at')
+        ? supabase.from('ig_accounts').select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at, notes')
             .eq('status', 'active').order('username')
         : Promise.resolve({ data: [] });
       const [tpl, acc] = await Promise.all([tplP, accP]);
@@ -266,27 +289,51 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     const rows: QueueRow[] = [];
 
     if (isIg) {
-      // Round-robin — track how many each account has taken so we don't
-      // overshoot its remaining KPI target.
-      const takes = new Map<string, number>();
-      let cursor = 0;
-      for (const lead of eligibleLeads) {
-        let assigned: string | null = null;
-        for (let i = 0; i < accountCapacity.length; i++) {
-          const acc = accountCapacity[(cursor + i) % accountCapacity.length];
-          const taken = takes.get(acc.username) || 0;
-          if (taken < acc.remaining) {
-            assigned = acc.username;
-            takes.set(acc.username, taken + 1);
-            cursor = (cursor + i + 1) % accountCapacity.length;
-            break;
+      // Lookup: username → account row (for pulling notes/hints later)
+      const accByName = new Map(accounts.map(a => [a.username, a]));
+      const notesFor = (u: string) => accByName.get(u)?.notes || null;
+
+      if (sendOrder === 'grouped') {
+        // WATERFALL: fill each account to its remaining capacity in order,
+        // then move to next account. Result: consecutive leads in the queue
+        // share the same sender, so the operator switches accounts once per
+        // ~30 sends instead of every send.
+        let leadIdx = 0;
+        for (const acc of accountCapacity) {
+          for (let i = 0; i < acc.remaining && leadIdx < eligibleLeads.length; i++) {
+            const lead = eligibleLeads[leadIdx++];
+            rows.push({
+              lead, sender_account: acc.username,
+              sender_notes: notesFor(acc.username),
+              message: personalize(template.content, lead), outcome: 'pending',
+            });
           }
+          if (leadIdx >= eligibleLeads.length) break;
         }
-        if (!assigned) break; // capacity exhausted — stop assigning
-        rows.push({
-          lead, sender_account: assigned,
-          message: personalize(template.content, lead), outcome: 'pending',
-        });
+      } else {
+        // ROUND-ROBIN (legacy) — 1 lead per account then rotate. Fairer mix
+        // but every send is on a different account.
+        const takes = new Map<string, number>();
+        let cursor = 0;
+        for (const lead of eligibleLeads) {
+          let assigned: string | null = null;
+          for (let i = 0; i < accountCapacity.length; i++) {
+            const acc = accountCapacity[(cursor + i) % accountCapacity.length];
+            const taken = takes.get(acc.username) || 0;
+            if (taken < acc.remaining) {
+              assigned = acc.username;
+              takes.set(acc.username, taken + 1);
+              cursor = (cursor + i + 1) % accountCapacity.length;
+              break;
+            }
+          }
+          if (!assigned) break;
+          rows.push({
+            lead, sender_account: assigned,
+            sender_notes: notesFor(assigned),
+            message: personalize(template.content, lead), outcome: 'pending',
+          });
+        }
       }
     } else {
       // WhatsApp: single sender (user's personal WA), cap at safe daily.
@@ -295,6 +342,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
         const lead = eligibleLeads[i];
         rows.push({
           lead, sender_account: 'personal_whatsapp',
+          sender_notes: null,
           message: personalize(template.content, lead), outcome: 'pending',
         });
       }
@@ -306,18 +354,63 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     }
     setQueue(rows);
     setCurrentIndex(0);
+    setSwitchAcknowledged(false); // reset — first cluster needs to be acknowledged
     setPhase('run');
   };
 
-  // ─── Current lead ─────────────────────────────
+  // ─── Current lead + cluster derivation ────────
   const current = queue[currentIndex];
   const currentContact = current ? leadContact(current.lead, channel) : null;
+
+  // Cluster metadata (grouped mode only): how many consecutive leads share
+  // the same sender_account, where the current cluster starts/ends, and
+  // whether we're on the very first lead of a new cluster (→ show the
+  // "SWITCH TO" banner).
+  const clusterInfo = useMemo(() => {
+    if (!isIg || sendOrder !== 'grouped' || queue.length === 0 || !current) {
+      return { isClusterStart: false, clusterIndex: 0, clusterTotal: 0, clusterSize: 0, positionInCluster: 0, totalClusters: 0 };
+    }
+    // Cluster start = first lead of the queue, OR previous lead had a different sender
+    const prev = currentIndex > 0 ? queue[currentIndex - 1] : null;
+    const isClusterStart = !prev || prev.sender_account !== current.sender_account;
+    // Count leads in this cluster (contiguous same-sender run around currentIndex)
+    let start = currentIndex;
+    while (start > 0 && queue[start - 1].sender_account === current.sender_account) start--;
+    let end = currentIndex;
+    while (end < queue.length - 1 && queue[end + 1].sender_account === current.sender_account) end++;
+    const clusterSize = end - start + 1;
+    const positionInCluster = currentIndex - start + 1;
+    // Total clusters = distinct sender_accounts in queue order
+    let totalClusters = 0;
+    let clusterIndex = 0;
+    let lastSender: string | null = null;
+    for (let i = 0; i < queue.length; i++) {
+      if (queue[i].sender_account !== lastSender) {
+        totalClusters++;
+        if (i <= currentIndex) clusterIndex = totalClusters;
+      }
+      lastSender = queue[i].sender_account;
+    }
+    return { isClusterStart, clusterIndex, clusterTotal: totalClusters, clusterSize, positionInCluster, totalClusters };
+  }, [current, currentIndex, queue, isIg, sendOrder]);
+
+  // Reset the "I've switched" acknowledgement whenever the operator lands
+  // on the first lead of a new cluster. Blocks Open-in-IG until they confirm.
+  useEffect(() => {
+    if (isIg && sendOrder === 'grouped' && clusterInfo.isClusterStart) {
+      setSwitchAcknowledged(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.sender_account]);
 
   // ─── Open in the channel's native app ─────────
   // IG: opens ig.me/m/<handle> — user has to paste the message
   // WA: opens wa.me/<phone>?text=<encoded> — message prefills automatically
+  // In grouped IG mode, blocked until the operator confirms they've switched
+  // to the correct account (guards against 30 sends going out from the wrong @).
   const openInChannel = async () => {
     if (!current || !currentContact) return;
+    if (isIg && sendOrder === 'grouped' && !switchAcknowledged) return;
     if (isIg) {
       try {
         await navigator.clipboard.writeText(current.message);
@@ -326,9 +419,13 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
       } catch { /* clipboard blocked without gesture — no-op, IG still opens */ }
       window.open(igDmLink(currentContact), '_blank', 'noopener,noreferrer');
     } else {
-      // WhatsApp: message auto-prefills via URL, no clipboard needed
       window.open(waDmLink(currentContact, current.message), '_blank', 'noopener,noreferrer');
     }
+  };
+
+  const persistSendOrder = (v: SendOrder) => {
+    setSendOrder(v);
+    if (typeof window !== 'undefined') window.localStorage.setItem('prospex_send_order', v);
   };
 
   // ─── Log outcome + advance ────────────────────
@@ -479,6 +576,37 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   </div>
                 </div>
               )}
+
+              {/* Send order — grouped vs round-robin — IG only, only useful with 2+ accounts */}
+              {isIg && accountCapacity.length >= 2 && (
+                <div>
+                  <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5">Send order</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <button onClick={() => persistSendOrder('grouped')}
+                      className={cn('text-left p-2.5 rounded border transition-colors',
+                        sendOrder === 'grouped' ? 'bg-orange-500/10 border-orange-500/40 text-prospex-text' : 'bg-prospex-bg border-prospex-border text-prospex-muted hover:text-prospex-text')}>
+                      <p className="text-[11px] font-mono flex items-center gap-1.5">
+                        {sendOrder === 'grouped' && <Check className="w-3 h-3 text-orange-400" />}
+                        🎯 Grouped by account <span className="text-[9px] text-prospex-dim">(recommended)</span>
+                      </p>
+                      <p className="text-[9px] text-prospex-dim mt-0.5">
+                        Fills @account_1 to its cap, then switches. ~{accountCapacity.length} account switches instead of ~{Math.min(eligibleLeads.length, totalCapacity)}.
+                      </p>
+                    </button>
+                    <button onClick={() => persistSendOrder('round_robin')}
+                      className={cn('text-left p-2.5 rounded border transition-colors',
+                        sendOrder === 'round_robin' ? 'bg-orange-500/10 border-orange-500/40 text-prospex-text' : 'bg-prospex-bg border-prospex-border text-prospex-muted hover:text-prospex-text')}>
+                      <p className="text-[11px] font-mono flex items-center gap-1.5">
+                        {sendOrder === 'round_robin' && <Check className="w-3 h-3 text-orange-400" />}
+                        🔄 Round-robin
+                      </p>
+                      <p className="text-[9px] text-prospex-dim mt-0.5">
+                        Alternates every send. Fairer mix but you switch accounts constantly. Only use for very small batches.
+                      </p>
+                    </button>
+                  </div>
+                </div>
+              )}
               {isWa && (
                 <div>
                   <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5">Sending from</p>
@@ -535,6 +663,42 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                 <div className={cn('h-full transition-all', channelMeta.dot)} style={{ width: `${((currentIndex + 1) / queue.length) * 100}%` }} />
               </div>
 
+              {/* SWITCH ACCOUNT banner — IG grouped mode only, at every cluster start */}
+              {isIg && sendOrder === 'grouped' && clusterInfo.isClusterStart && (
+                <div className={cn(
+                  'p-3 rounded-lg border-2 transition-colors',
+                  switchAcknowledged ? 'bg-prospex-green/10 border-prospex-green/40' : 'bg-orange-500/15 border-orange-500/50 animate-pulse'
+                )}>
+                  <div className="flex items-start gap-3">
+                    <div className="flex-shrink-0 mt-0.5">
+                      {switchAcknowledged ? <Check className="w-5 h-5 text-prospex-green" /> : <div className="w-5 h-5 rounded-full bg-orange-500 flex items-center justify-center text-white text-[11px] font-bold">!</div>}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-mono font-bold text-prospex-text">
+                        {switchAcknowledged ? '✓ Ready to send from' : '🔔 SWITCH TO'} <span className="text-orange-400">@{current.sender_account}</span>
+                        <span className="text-[10px] text-prospex-dim font-normal ml-2">
+                          Cluster {clusterInfo.clusterIndex} of {clusterInfo.totalClusters} · {clusterInfo.clusterSize} messages
+                        </span>
+                      </p>
+                      {current.sender_notes && (
+                        <p className="text-[10px] text-prospex-cyan mt-1 font-mono">📍 {current.sender_notes}</p>
+                      )}
+                      {!switchAcknowledged && (
+                        <p className="text-[10px] text-prospex-dim mt-1">
+                          In Instagram: switch to <strong>@{current.sender_account}</strong>. Then click below to unlock the send button.
+                        </p>
+                      )}
+                    </div>
+                    {!switchAcknowledged && (
+                      <button onClick={() => setSwitchAcknowledged(true)}
+                        className="btn-primary text-xs bg-orange-500/20 text-orange-400 border-orange-500/40 hover:bg-orange-500/30 flex-shrink-0">
+                        <Check className="w-3 h-3" /> I&apos;ve switched
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* WA pacing reminder */}
               {isWa && waGapRemaining > 0 && (
                 <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded text-[11px] text-amber-400 flex items-center gap-2">
@@ -576,16 +740,26 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
 
               {/* Action buttons */}
               <div className="flex flex-col gap-2">
-                <button onClick={openInChannel} className={cn(
-                  'w-full flex items-center justify-center gap-2 border py-3 rounded-lg font-mono text-sm transition-colors',
-                  isIg ? 'bg-pink-500/20 text-pink-400 border-pink-500/40 hover:bg-pink-500/30'
-                       : 'bg-green-500/20 text-green-400 border-green-500/40 hover:bg-green-500/30'
-                )}>
-                  {isIg
-                    ? (copied ? <><Check className="w-4 h-4" /> Copied · IG opened → paste + send</> : <><Instagram className="w-4 h-4" /> Open in Instagram (O)</>)
-                    : <><MessageCircle className="w-4 h-4" /> Open in WhatsApp Web (O) · message auto-prefills</>
+                <button onClick={openInChannel}
+                  disabled={isIg && sendOrder === 'grouped' && !switchAcknowledged}
+                  className={cn(
+                    'w-full flex items-center justify-center gap-2 border py-3 rounded-lg font-mono text-sm transition-colors',
+                    isIg && sendOrder === 'grouped' && !switchAcknowledged ? 'bg-prospex-bg text-prospex-dim border-prospex-border cursor-not-allowed'
+                    : isIg ? 'bg-pink-500/20 text-pink-400 border-pink-500/40 hover:bg-pink-500/30'
+                    : 'bg-green-500/20 text-green-400 border-green-500/40 hover:bg-green-500/30'
+                  )}>
+                  {isIg && sendOrder === 'grouped' && !switchAcknowledged
+                    ? <>🔒 Confirm account switch first</>
+                    : isIg
+                      ? (copied ? <><Check className="w-4 h-4" /> Copied · IG opened → paste + send</> : <><Instagram className="w-4 h-4" /> Open in Instagram (O)</>)
+                      : <><MessageCircle className="w-4 h-4" /> Open in WhatsApp Web (O) · message auto-prefills</>
                   }
                 </button>
+                {isIg && sendOrder === 'grouped' && clusterInfo.clusterSize > 0 && (
+                  <p className="text-[10px] text-prospex-dim text-center -mt-1">
+                    Sending {clusterInfo.positionInCluster}/{clusterInfo.clusterSize} from @{current.sender_account} · cluster {clusterInfo.clusterIndex} of {clusterInfo.totalClusters}
+                  </p>
+                )}
 
                 <div className="grid grid-cols-3 gap-2">
                   <button onClick={() => logAndAdvance('sent')} disabled={logging}

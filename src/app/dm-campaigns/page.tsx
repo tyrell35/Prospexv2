@@ -976,6 +976,11 @@ function AccountsTab() {
     refresh();
   };
 
+  const handleNotesChange = async (account: IgAccount, notes: string) => {
+    await api('manage_accounts', { sub_action: 'update', account_id: account.id, notes });
+    refresh();
+  };
+
   return (
     <div className="space-y-4">
       {/* Warmup procedure — collapsible */}
@@ -1174,6 +1179,20 @@ skinstudio_uk, glow_medspa; ultra_beauty"
                       <td className="px-3 py-2.5">
                         <p className="text-prospex-text font-mono">@{a.username}</p>
                         {a.display_name && <p className="text-[10px] text-prospex-dim">{a.display_name}</p>}
+                        {/* Location hint — where this account is logged in.
+                            Shown in the Fast Blast switch-account banner so
+                            operator knows exactly where to go. */}
+                        <input
+                          type="text"
+                          defaultValue={a.notes || ''}
+                          onBlur={e => {
+                            const v = e.target.value.trim();
+                            if (v !== (a.notes || '')) handleNotesChange(a, v);
+                          }}
+                          placeholder="📍 Chrome Profile 3 · Mobile slot 2 · ..."
+                          className="input text-[9px] py-0.5 px-1.5 mt-1 w-full"
+                          title="Optional: where this account is logged in (e.g. Chrome Profile 3, Mobile app slot 2). Shown in the switch-account banner during Fast Blast."
+                        />
                         <select value={a.status || 'active'} onChange={e => handleStatus(a, e.target.value)} className="input text-[9px] py-0.5 px-1.5 mt-1 w-auto">
                           <option value="active">active</option>
                           <option value="warming">warming</option>
