@@ -34,6 +34,7 @@ export interface Lead {
   ghl_pushed_at: string | null;
   search_id: string | null;
   pipeline_stage: 'new' | 'contacted' | 'pitched' | 'booked' | 'closed' | 'lost';
+  hot_list_at: string | null;
   created_at: string;
   updated_at: string;
 }
