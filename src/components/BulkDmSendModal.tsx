@@ -690,14 +690,50 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
               {/* Template picker */}
               <div>
                 <label className="text-[10px] font-mono uppercase text-prospex-dim block mb-1.5">Template</label>
+                {/* Grouped by category — native <optgroup> keeps the picker
+                    scannable when there are 30+ templates. Category display
+                    order matches the playbook's own flow. */}
                 <select value={selectedTemplateId} onChange={e => setSelectedTemplateId(e.target.value)} className="input w-full text-xs">
                   <option value="">— pick a template —</option>
                   <option value="custom">✍️ Custom message (write your own)</option>
-                  {templates.map(t => (
-                    <option key={t.id} value={t.id}>
-                      {t.category ? `[${t.category}] ` : ''}{t.name}
-                    </option>
-                  ))}
+                  {(() => {
+                    const groupOrder = ['cold_open', 'audition_opener', 'objection', 'closing', 'follow_up', 'voice_note', 'greeting', 'qualifying', 'booking', 'case_study', 'social_proof', 'general', 'gift_leads', 'sms_sequence', 'top_tier_no_ads', 'top_tier_with_ads', 'top_tier_multi_device'];
+                    const groupLabels: Record<string, string> = {
+                      cold_open: '🎯 Cold Open',
+                      audition_opener: '🔥 Audition Openers',
+                      objection: '🛡️ Objection Handlers',
+                      closing: '✅ Close',
+                      follow_up: '🔁 Follow-Up Sequence',
+                      voice_note: '🎙️ Voice Note',
+                      greeting: '👋 Greeting',
+                      qualifying: '🔍 Qualifying',
+                      booking: '📅 Booking',
+                      case_study: '📊 Case Study',
+                      social_proof: '⭐ Social Proof',
+                      general: 'General',
+                      gift_leads: '🎁 Gift Leads',
+                      sms_sequence: '📱 SMS Sequence',
+                      top_tier_no_ads: '🏆 Top Tier · No Ads',
+                      top_tier_with_ads: '🏆 Top Tier · With Ads',
+                      top_tier_multi_device: '🏆 Top Tier · Multi-Device',
+                    };
+                    const byCategory = new Map<string, typeof templates>();
+                    for (const t of templates) {
+                      const k = t.category || 'general';
+                      if (!byCategory.has(k)) byCategory.set(k, []);
+                      byCategory.get(k)!.push(t);
+                    }
+                    // Sort — known categories in playbook order first, then any unknown ones alphabetically
+                    const known = groupOrder.filter(k => byCategory.has(k));
+                    const unknown = Array.from(byCategory.keys()).filter(k => !groupOrder.includes(k)).sort();
+                    return [...known, ...unknown].map(cat => (
+                      <optgroup key={cat} label={groupLabels[cat] || cat}>
+                        {byCategory.get(cat)!.map(t => (
+                          <option key={t.id} value={t.id}>{t.name}</option>
+                        ))}
+                      </optgroup>
+                    ));
+                  })()}
                 </select>
               </div>
 

@@ -57,6 +57,49 @@ interface DbTemplate {
   channel: string | null;
 }
 
+// Playbook display order — matches the operator flow (opener → audition →
+// handler → close → follow-up). Anything unknown falls to the bottom.
+const TEMPLATE_GROUP_ORDER = [
+  'cold_open', 'audition_opener', 'objection', 'closing', 'follow_up', 'voice_note',
+  'greeting', 'qualifying', 'booking', 'case_study', 'social_proof', 'general',
+  'gift_leads', 'sms_sequence', 'top_tier_no_ads', 'top_tier_with_ads', 'top_tier_multi_device',
+];
+const TEMPLATE_GROUP_LABELS: Record<string, string> = {
+  cold_open: '🎯 Cold Open',
+  audition_opener: '🔥 Audition',
+  objection: '🛡️ Handlers',
+  closing: '✅ Close',
+  follow_up: '🔁 Follow-Up',
+  voice_note: '🎙️ Voice Note',
+  greeting: '👋 Greeting',
+  qualifying: '🔍 Qualifying',
+  booking: '📅 Booking',
+  case_study: '📊 Case Study',
+  social_proof: '⭐ Social Proof',
+  general: 'General',
+  gift_leads: '🎁 Gift Leads',
+  sms_sequence: '📱 SMS',
+  top_tier_no_ads: '🏆 Top Tier · No Ads',
+  top_tier_with_ads: '🏆 Top Tier · With Ads',
+  top_tier_multi_device: '🏆 Top Tier · Multi-Device',
+};
+
+function groupTemplates(list: DbTemplate[]): Array<{ category: string; label: string; templates: DbTemplate[] }> {
+  const byCategory = new Map<string, DbTemplate[]>();
+  for (const t of list) {
+    const k = t.category || 'general';
+    if (!byCategory.has(k)) byCategory.set(k, []);
+    byCategory.get(k)!.push(t);
+  }
+  const known = TEMPLATE_GROUP_ORDER.filter(k => byCategory.has(k));
+  const unknown = Array.from(byCategory.keys()).filter(k => !TEMPLATE_GROUP_ORDER.includes(k)).sort();
+  return [...known, ...unknown].map(cat => ({
+    category: cat,
+    label: TEMPLATE_GROUP_LABELS[cat] || cat,
+    templates: byCategory.get(cat)!,
+  }));
+}
+
 // Pipeline stage → display metadata for the "My Pipeline" grouped view.
 // Order matters — this is the top-down flow the eye should follow.
 const PIPELINE_GROUPS: Array<{ key: string; label: string; icon: typeof Inbox; cls: string; help: string }> = [
@@ -325,33 +368,47 @@ export default function HotListPage() {
             Desktop: absolute popover anchored to card */}
         {quickOpen && (
           <div data-quick-dm onClick={e => e.stopPropagation()}
-            className="fixed md:absolute inset-x-0 bottom-0 md:inset-auto md:right-2 md:top-full md:bottom-auto md:mt-1 z-40 md:z-30 w-full md:w-72 max-w-full card bg-prospex-surface border-orange-500/40 shadow-xl p-3 md:p-2 space-y-2 rounded-b-none md:rounded-lg">
+            className="fixed md:absolute inset-x-0 bottom-0 md:inset-auto md:right-2 md:top-full md:bottom-auto md:mt-1 z-40 md:z-30 w-full md:w-80 max-w-full card bg-prospex-surface border-orange-500/40 shadow-xl p-3 md:p-2 rounded-b-none md:rounded-lg max-h-[70vh] md:max-h-[500px] overflow-y-auto">
             {hasIg && (
-              <div>
-                <p className="text-[9px] font-mono text-pink-400 uppercase mb-1 flex items-center gap-1"><Instagram className="w-2.5 h-2.5" /> Instagram</p>
-                <div className="space-y-0.5 max-h-40 overflow-y-auto">
-                  {igTemplates.slice(0, 8).map(t => (
-                    <button key={t.id} onClick={() => quickDm(l, 'instagram', t.content)}
-                      className="w-full text-left text-xs md:text-[10px] px-2 py-2 md:py-1 rounded hover:bg-pink-500/10 text-prospex-text truncate min-h-[36px] md:min-h-0">
-                      {t.category ? <span className="text-prospex-dim">[{t.category}] </span> : null}{t.name}
-                    </button>
-                  ))}
-                  {igTemplates.length === 0 && <p className="text-[9px] text-prospex-dim italic">No IG templates yet</p>}
-                </div>
+              <div className="mb-3">
+                <p className="text-[10px] md:text-[9px] font-mono text-pink-400 uppercase mb-1.5 flex items-center gap-1 sticky top-0 bg-prospex-surface py-1 z-10">
+                  <Instagram className="w-3 h-3 md:w-2.5 md:h-2.5" /> Instagram · {igTemplates.length} templates
+                </p>
+                {groupTemplates(igTemplates).map(g => (
+                  <div key={g.category} className="mb-2 last:mb-0">
+                    <p className="text-[9px] font-mono text-prospex-dim uppercase px-1 mb-0.5">{g.label} · {g.templates.length}</p>
+                    <div className="space-y-0.5">
+                      {g.templates.map(t => (
+                        <button key={t.id} onClick={() => quickDm(l, 'instagram', t.content)}
+                          className="w-full text-left text-xs md:text-[10px] px-2 py-2 md:py-1 rounded hover:bg-pink-500/10 text-prospex-text truncate min-h-[36px] md:min-h-0">
+                          {t.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {igTemplates.length === 0 && <p className="text-[10px] text-prospex-dim italic">No IG templates yet</p>}
               </div>
             )}
             {hasWa && (
               <div>
-                <p className="text-[9px] font-mono text-green-400 uppercase mb-1 flex items-center gap-1"><MessageCircle className="w-2.5 h-2.5" /> WhatsApp</p>
-                <div className="space-y-0.5 max-h-40 overflow-y-auto">
-                  {waTemplates.slice(0, 8).map(t => (
-                    <button key={t.id} onClick={() => quickDm(l, 'whatsapp', t.content)}
-                      className="w-full text-left text-xs md:text-[10px] px-2 py-2 md:py-1 rounded hover:bg-green-500/10 text-prospex-text truncate min-h-[36px] md:min-h-0">
-                      {t.category ? <span className="text-prospex-dim">[{t.category}] </span> : null}{t.name}
-                    </button>
-                  ))}
-                  {waTemplates.length === 0 && <p className="text-[9px] text-prospex-dim italic">No WA templates yet</p>}
-                </div>
+                <p className="text-[10px] md:text-[9px] font-mono text-green-400 uppercase mb-1.5 flex items-center gap-1 sticky top-0 bg-prospex-surface py-1 z-10">
+                  <MessageCircle className="w-3 h-3 md:w-2.5 md:h-2.5" /> WhatsApp · {waTemplates.length} templates
+                </p>
+                {groupTemplates(waTemplates).map(g => (
+                  <div key={g.category} className="mb-2 last:mb-0">
+                    <p className="text-[9px] font-mono text-prospex-dim uppercase px-1 mb-0.5">{g.label} · {g.templates.length}</p>
+                    <div className="space-y-0.5">
+                      {g.templates.map(t => (
+                        <button key={t.id} onClick={() => quickDm(l, 'whatsapp', t.content)}
+                          className="w-full text-left text-xs md:text-[10px] px-2 py-2 md:py-1 rounded hover:bg-green-500/10 text-prospex-text truncate min-h-[36px] md:min-h-0">
+                          {t.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                {waTemplates.length === 0 && <p className="text-[10px] text-prospex-dim italic">No WA templates yet</p>}
               </div>
             )}
             {!hasIg && !hasWa && (
