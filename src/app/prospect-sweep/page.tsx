@@ -5,7 +5,7 @@ import Link from 'next/link';
 import {
   Microscope, Star, MapPin, RefreshCw, Loader2, Filter, Pin,
   Sparkles, Check, ChevronDown, ChevronRight, ExternalLink,
-  AlertCircle, Trophy, Instagram, MessageCircle,
+  AlertCircle, Trophy, Instagram, MessageCircle, Zap, XCircle,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
@@ -83,6 +83,11 @@ export default function ProspectSweepPage() {
   const [updatingNicheKey, setUpdatingNicheKey] = useState<string | null>(null);
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  // Enrichment progress state — used by both the top-level "Enrich all"
+  // action and the per-group "Enrich this group" actions
+  const [enrichRunning, setEnrichRunning] = useState(false);
+  const [enrichCancel, setEnrichCancel] = useState<{ requested: boolean }>({ requested: false });
+  const [enrichProgress, setEnrichProgress] = useState<{ done: number; total: number; devicesFound: number; label: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -234,6 +239,81 @@ export default function ProspectSweepPage() {
     }
   };
 
+  // ─── Batch enrichment ────────────────────────
+  // Fires /api/hunt/enrich in chunks (each lead's website fetch is
+  // ~5-10s serverside, so we batch small to stay within Vercel's function
+  // timeout and to show visible progress). After each chunk completes,
+  // we re-merge the fresh enrichment into local state without reloading
+  // the whole page. Cancel button lets the operator stop mid-run.
+  const enrichLeads = async (targetLeads: EnrichedLead[], contextLabel: string) => {
+    // Only enrich leads that don't already have devices_found data
+    const toEnrich = targetLeads.filter(l => !l.devices_found || l.devices_found.length === 0);
+    if (toEnrich.length === 0) {
+      setToast('These leads are already enriched.');
+      setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    const total = toEnrich.length;
+    const estMinutes = Math.ceil(total * 8 / 60); // ~8s per lead average
+    if (!confirm(`Enrich ${total} lead${total === 1 ? '' : 's'} from ${contextLabel}?\n\nEach lead's website is fetched + scanned for devices, booking system, and (UK) Companies House lookup. Runs serially — approx ${estMinutes} min${estMinutes === 1 ? '' : 's'} for ${total} lead${total === 1 ? '' : 's'}.\n\nYou can cancel mid-run.`)) return;
+
+    const cancelToken = { requested: false };
+    setEnrichCancel(cancelToken);
+    setEnrichRunning(true);
+    setEnrichProgress({ done: 0, total, devicesFound: 0, label: contextLabel });
+    setError(null);
+
+    // Chunk of 10 → each API call ~80s max, safely under Vercel's ~5min timeout
+    const CHUNK_SIZE = 10;
+    let devicesFound = 0;
+    let done = 0;
+    try {
+      for (let i = 0; i < toEnrich.length; i += CHUNK_SIZE) {
+        if (cancelToken.requested) break;
+        const chunk = toEnrich.slice(i, i + CHUNK_SIZE);
+        const res = await fetch('/api/hunt/enrich', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lead_ids: chunk.map(l => l.id), refetch: true }),
+        });
+        const json = await res.json();
+        if (!res.ok || json.success === false) {
+          throw new Error(json.error || `Enrichment chunk failed (HTTP ${res.status})`);
+        }
+        // Count devices found in this chunk (results[] has ok flag + device count)
+        if (Array.isArray(json.results)) {
+          devicesFound += json.results.filter((r: { ok: boolean; devices?: number }) => r.ok && (r.devices ?? 0) > 0).length;
+        }
+        done += chunk.length;
+        setEnrichProgress({ done, total, devicesFound, label: contextLabel });
+      }
+      setToast(cancelToken.requested
+        ? `⚠ Cancelled after ${done}/${total} enriched (${devicesFound} had devices detected).`
+        : `✓ Enriched ${done} lead${done === 1 ? '' : 's'} · ${devicesFound} had devices detected.`);
+      // Reload so new device data appears in groups
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Enrichment failed');
+    } finally {
+      setEnrichRunning(false);
+      setEnrichProgress(null);
+      setTimeout(() => setToast(null), 6000);
+    }
+  };
+
+  // The three enrich entry points — same underlying batch runner
+  const enrichAllUnenriched = () => {
+    const unenriched = leads.filter(l => !l.devices_found || l.devices_found.length === 0);
+    enrichLeads(unenriched, 'the full sweep');
+  };
+  const enrichGroup = (group: Group) => {
+    enrichLeads(group.leads, `"${group.label}"`);
+  };
+  const cancelEnrich = () => {
+    enrichCancel.requested = true;
+    setToast('Cancelling after current batch…');
+  };
+
   const updateGroupNiche = async (group: Group) => {
     if (!group.suggestedNiche || group.mismatchCount === 0) return;
     if (!confirm(`Update the niche field on ${group.mismatchCount} lead${group.mismatchCount === 1 ? '' : 's'} in "${group.label}" to "${group.suggestedNiche}"?\n\nThis only affects leads where the stored niche disagrees with the detected device.`)) return;
@@ -335,6 +415,49 @@ export default function ProspectSweepPage() {
         </div>
       )}
 
+      {/* Top-level enrich CTA — appears when there are leads without device data.
+          Estimated time is honest: each lead's website fetch is ~5-10s. */}
+      {!loading && !enrichRunning && leads.length > 0 && (leads.length - summary.withDevice) > 0 && (
+        <div className="card p-3 border-amber-500/30 bg-amber-500/5 flex flex-wrap items-center gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-mono text-amber-400">
+              🔬 {(leads.length - summary.withDevice).toLocaleString()} lead{leads.length - summary.withDevice === 1 ? '' : 's'} in this sweep have no device data yet
+            </p>
+            <p className="text-[10px] text-prospex-dim mt-0.5">
+              Enrich them now to unlock device grouping. Runs serially — approx {Math.ceil((leads.length - summary.withDevice) * 8 / 60)} min for the full batch. Cancel anytime.
+            </p>
+          </div>
+          <button onClick={enrichAllUnenriched}
+            className="btn text-xs md:text-sm bg-amber-500/20 text-amber-400 border border-amber-500/40 hover:bg-amber-500/30 min-h-[40px]">
+            <Zap className="w-4 h-4 md:w-3.5 md:h-3.5" /> Enrich all {leads.length - summary.withDevice}
+          </button>
+        </div>
+      )}
+
+      {/* Live enrichment progress */}
+      {enrichRunning && enrichProgress && (
+        <div className="card p-3 border-prospex-cyan/40 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <Loader2 className="w-4 h-4 text-prospex-cyan animate-spin flex-shrink-0" />
+              <p className="text-xs font-mono text-prospex-text truncate">
+                Enriching {enrichProgress.done} / {enrichProgress.total} from {enrichProgress.label}
+              </p>
+            </div>
+            <button onClick={cancelEnrich} className="text-xs text-prospex-dim hover:text-prospex-red flex items-center gap-1 min-h-[32px] px-2 flex-shrink-0">
+              <XCircle className="w-3.5 h-3.5" /> Cancel
+            </button>
+          </div>
+          <div className="w-full h-1.5 bg-prospex-bg rounded-full overflow-hidden">
+            <div className="h-full bg-prospex-cyan transition-all" style={{ width: `${(enrichProgress.done / enrichProgress.total) * 100}%` }} />
+          </div>
+          <p className="text-[10px] text-prospex-dim">
+            {enrichProgress.devicesFound > 0 && `🔬 ${enrichProgress.devicesFound} devices detected so far · `}
+            page will refresh when complete
+          </p>
+        </div>
+      )}
+
       {toast && <div className="card p-2 text-xs text-prospex-cyan border-prospex-cyan/40">{toast}</div>}
       {error && <div className="card p-2 text-xs text-prospex-red border-prospex-red/40">{error}</div>}
 
@@ -404,6 +527,14 @@ export default function ProspectSweepPage() {
                         className="btn text-sm md:text-xs bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 min-h-[40px] disabled:opacity-50">
                         {isUpdatingNiche ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                         Fix niche on {g.mismatchCount}
+                      </button>
+                    )}
+                    {/* Enrich this group — appears on niche + unclassified groups
+                        where devices haven't been detected yet. */}
+                    {(g.kind === 'niche' || g.kind === 'unclassified') && !enrichRunning && (
+                      <button onClick={() => enrichGroup(g)}
+                        className="btn text-sm md:text-xs bg-prospex-cyan/10 text-prospex-cyan border border-prospex-cyan/30 hover:bg-prospex-cyan/20 min-h-[40px]">
+                        <Zap className="w-3.5 h-3.5" /> Enrich {g.leads.length}
                       </button>
                     )}
                   </div>
