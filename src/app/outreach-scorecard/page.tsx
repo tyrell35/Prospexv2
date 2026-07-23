@@ -178,11 +178,11 @@ export default function OutreachScorecardPage() {
             The one page that answers: how many sends, how many replies, how many bookings — and per account.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={() => setShowEodPreview(true)} className="btn-ghost text-xs w-fit" title="Preview and confirm the EOD digest before Slack">
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => setShowEodPreview(true)} className="btn-ghost text-xs min-h-[40px] md:min-h-0" title="Preview and confirm the EOD digest before Slack">
             <Slack className="w-3.5 h-3.5" /> Post EOD to Slack
           </button>
-          <button onClick={load} className="btn-ghost text-xs w-fit">
+          <button onClick={load} className="btn-ghost text-xs min-h-[40px] md:min-h-0">
             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} Refresh
           </button>
         </div>
@@ -301,7 +301,106 @@ export default function OutreachScorecardPage() {
             {data.by_account.length === 0 ? (
               <p className="text-xs text-prospex-dim py-4 text-center">No per-account sends logged in this window yet.</p>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+              {/* MOBILE — card list of per-account performance. Each card
+                  expands on tap to reveal the account's individual sends
+                  in this window (same drill-down data as desktop). */}
+              <div className="md:hidden space-y-2">
+                {data.by_account.map(a => {
+                  const target = a.daily_target || a.daily_limit || 30;
+                  const usePct = target > 0 ? Math.round((a.daily_sent_today / target) * 100) : 0;
+                  const overCap = a.daily_limit > 0 && a.daily_sent_today >= a.daily_limit;
+                  const barColor = overCap ? 'bg-prospex-red' : usePct >= 100 ? 'bg-prospex-green' : usePct >= 80 ? 'bg-prospex-cyan' : 'bg-prospex-cyan/60';
+                  const replyRate = a.sent > 0 ? Math.round((a.window_replies / a.sent) * 1000) / 10 : 0;
+                  const stageBadge = a.warmup_stage === 'new' ? '🆕 new' : a.warmup_stage === 'warming' ? `🔥 warming d${a.warmup_days}` : a.warmup_stage === 'paused' ? '⏸ paused' : '';
+                  const isExpanded = expandedAccount === a.account;
+                  const accountMessages = messagesByAccount.get(a.account) || [];
+                  return (
+                    <div key={a.account} className="bg-prospex-bg/50 rounded-lg border border-prospex-border overflow-hidden">
+                      <button onClick={() => setExpandedAccount(isExpanded ? null : a.account)}
+                        className="w-full text-left p-3 min-h-[44px]">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-mono text-prospex-text truncate">
+                              @{a.account}
+                              {stageBadge && <span className="ml-2 text-[10px] text-prospex-dim">{stageBadge}</span>}
+                            </p>
+                            <p className="text-[10px] text-prospex-dim mt-0.5">
+                              {a.daily_sent_today}/{target} today · reply rate {replyRate}%
+                            </p>
+                          </div>
+                          {isExpanded ? <ChevronDown className="w-4 h-4 text-prospex-dim flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-prospex-dim flex-shrink-0" />}
+                        </div>
+                        {/* Today/target progress bar */}
+                        <div className="w-full h-1 bg-prospex-bg rounded-full mt-2">
+                          <div className={cn('h-1 rounded-full', barColor)} style={{ width: `${Math.min(100, usePct)}%` }} />
+                        </div>
+                        {/* Metrics tiles */}
+                        <div className="grid grid-cols-4 gap-1.5 mt-2.5">
+                          <div className="bg-prospex-surface rounded p-1.5 text-center">
+                            <p className="text-[9px] font-mono text-prospex-dim uppercase">Sent</p>
+                            <p className="text-sm font-mono font-bold text-prospex-cyan">{a.sent}</p>
+                          </div>
+                          <div className="bg-prospex-surface rounded p-1.5 text-center">
+                            <p className="text-[9px] font-mono text-prospex-dim uppercase">Replies</p>
+                            <p className="text-sm font-mono font-bold text-prospex-text">{a.window_replies}</p>
+                          </div>
+                          <div className="bg-prospex-surface rounded p-1.5 text-center">
+                            <p className="text-[9px] font-mono text-prospex-dim uppercase">🟢</p>
+                            <p className="text-sm font-mono font-bold text-prospex-green">{a.window_positive}</p>
+                          </div>
+                          <div className="bg-prospex-surface rounded p-1.5 text-center">
+                            <p className="text-[9px] font-mono text-prospex-dim uppercase">🔴</p>
+                            <p className="text-sm font-mono font-bold text-prospex-red/80">{a.window_negative}</p>
+                          </div>
+                        </div>
+                      </button>
+                      {isExpanded && (
+                        <div className="border-t border-prospex-border/50 bg-prospex-bg/60 px-3 py-3">
+                          {accountMessages.length === 0 ? (
+                            <p className="text-[11px] text-prospex-dim italic">
+                              No individual messages in this window.
+                            </p>
+                          ) : (
+                            <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
+                              <p className="text-[10px] font-mono text-prospex-dim uppercase mb-2">
+                                Messages from @{a.account} · {accountMessages.length}
+                              </p>
+                              {accountMessages.map((m, i) => (
+                                <div key={`${m.lead_id}-${m.created_at}-${i}`}
+                                  className="py-1.5 border-b border-prospex-border/20 last:border-0">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-[10px] font-mono text-prospex-dim whitespace-nowrap flex-shrink-0">
+                                      {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                    {m.lead_id ? (
+                                      <Link href={`/leads/${m.lead_id}`} className="text-[11px] font-mono text-prospex-cyan hover:underline truncate">
+                                        {m.lead_business}
+                                      </Link>
+                                    ) : (
+                                      <span className="text-[11px] font-mono text-prospex-text truncate">{m.lead_business}</span>
+                                    )}
+                                    <ReplyChip status={m.reply_status} />
+                                    {m.booked && <span className="text-[9px] font-mono text-prospex-green border border-prospex-green/40 rounded px-1.5 py-0.5">📅</span>}
+                                  </div>
+                                  {m.message_sent && (
+                                    <p className="text-[10px] text-prospex-dim italic mt-1 line-clamp-2">
+                                      &ldquo;{m.message_sent.slice(0, 160)}{m.message_sent.length > 160 ? '…' : ''}&rdquo;
+                                    </p>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* DESKTOP — original 8-column table, hidden on mobile */}
+              <div className="hidden md:block overflow-x-auto">
                 <table className="w-full text-xs min-w-[820px]">
                   <thead>
                     <tr className="table-header">
@@ -401,6 +500,7 @@ export default function OutreachScorecardPage() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
 

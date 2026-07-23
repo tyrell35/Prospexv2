@@ -88,11 +88,11 @@ export default function TodaysDmsStrip({ className }: { className?: string }) {
         )}
 
         <div className="ml-auto flex items-center gap-1.5">
-          <button onClick={load} className="text-prospex-dim hover:text-prospex-text" title="Refresh" aria-label="Refresh">
-            <RefreshCw className="w-3.5 h-3.5" />
+          <button onClick={load} className="text-prospex-dim hover:text-prospex-text p-2 md:p-0 min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center" title="Refresh" aria-label="Refresh">
+            <RefreshCw className="w-4 h-4 md:w-3.5 md:h-3.5" />
           </button>
           <button onClick={() => setShowPreview(true)} disabled={nothing}
-            className={cn('text-[10px] px-2 py-1 rounded border font-mono transition-colors disabled:opacity-40',
+            className={cn('text-xs md:text-[10px] px-3 py-2 md:px-2 md:py-1 min-h-[36px] md:min-h-0 rounded border font-mono transition-colors disabled:opacity-40',
               postedFlash
                 ? 'bg-prospex-green/20 text-prospex-green border-prospex-green/40'
                 : 'bg-prospex-cyan/10 text-prospex-cyan border-prospex-cyan/30 hover:bg-prospex-cyan/20')}
