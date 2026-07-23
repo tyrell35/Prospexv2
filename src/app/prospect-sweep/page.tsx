@@ -56,13 +56,19 @@ interface EnrichedLead extends LeadRow {
   primary_device: string | null;
   suggested_niche: string | null;
   niche_mismatch: boolean;
+  // Enrichment state — used to skip websites that already failed to fetch
+  // so re-runs don't burn API calls on dead sites.
+  //   attempted    → has a row in hunt_enrichment (whether or not devices were found)
+  //   fetch_failed → attempted AND fetch_ok=false (unreachable website)
+  enrichment_attempted: boolean;
+  fetch_failed: boolean;
 }
 
 interface Group {
   key: string;
   label: string;
   emoji: string;
-  kind: 'device' | 'niche' | 'unclassified';
+  kind: 'device' | 'niche' | 'unclassified' | 'unreachable';
   suggestedNiche: string | null; // only set for device groups
   leads: EnrichedLead[];
   avgRating: number;
@@ -109,20 +115,21 @@ export default function ProspectSweepPage() {
       const rows = (leadRows || []) as LeadRow[];
 
       // Fetch enrichment for these leads. Chunked to avoid a monster IN() clause.
-      const enrichmentMap = new Map<string, { devices_found: string[] | null; tier_a_count: number; tier_b_count: number }>();
+      const enrichmentMap = new Map<string, { devices_found: string[] | null; tier_a_count: number; tier_b_count: number; fetch_ok: boolean | null }>();
       const ids = rows.map(r => r.id);
       const CHUNK = 500;
       for (let i = 0; i < ids.length; i += CHUNK) {
         const chunk = ids.slice(i, i + CHUNK);
         const { data: enr } = await supabase
           .from('hunt_enrichment')
-          .select('lead_id, devices_found, tier_a_count, tier_b_count')
+          .select('lead_id, devices_found, tier_a_count, tier_b_count, fetch_ok')
           .in('lead_id', chunk);
-        for (const e of (enr || []) as Array<{ lead_id: string; devices_found: string[] | null; tier_a_count: number | null; tier_b_count: number | null }>) {
+        for (const e of (enr || []) as Array<{ lead_id: string; devices_found: string[] | null; tier_a_count: number | null; tier_b_count: number | null; fetch_ok: boolean | null }>) {
           enrichmentMap.set(e.lead_id, {
             devices_found: e.devices_found,
             tier_a_count: e.tier_a_count || 0,
             tier_b_count: e.tier_b_count || 0,
+            fetch_ok: e.fetch_ok,
           });
         }
       }
@@ -140,6 +147,8 @@ export default function ProspectSweepPage() {
           primary_device: primary,
           suggested_niche: suggested,
           niche_mismatch: mismatch,
+          enrichment_attempted: !!en,
+          fetch_failed: !!en && en.fetch_ok === false,
         };
       });
       setLeads(enriched);
@@ -158,8 +167,16 @@ export default function ProspectSweepPage() {
     const byDevice = new Map<string, EnrichedLead[]>();
     const byNiche = new Map<string, EnrichedLead[]>();
     const unclassified: EnrichedLead[] = [];
+    const unreachable: EnrichedLead[] = [];
 
     for (const l of leads) {
+      // Failed-fetch leads get their own bucket regardless of niche/device.
+      // Prevents re-runs from wasting API calls on sites we already know are
+      // unreachable, and lets the operator see the pile at a glance.
+      if (l.fetch_failed) {
+        unreachable.push(l);
+        continue;
+      }
       if (l.primary_device) {
         const k = l.primary_device;
         if (!byDevice.has(k)) byDevice.set(k, []);
@@ -202,15 +219,24 @@ export default function ProspectSweepPage() {
       ? [build('unclassified', 'unclassified', unclassified, 'No device + no niche', '❓', null)]
       : [];
 
-    return [...deviceGroups, ...nicheGroups, ...unclassGroups];
+    const unreachableGroups: Group[] = unreachable.length > 0
+      ? [build('unreachable', 'unreachable', unreachable, 'Website unreachable (skipped from enrichment)', '❌', null)]
+      : [];
+
+    return [...deviceGroups, ...nicheGroups, ...unclassGroups, ...unreachableGroups];
   }, [leads]);
 
   const summary = useMemo(() => {
     const withDevice = leads.filter(l => l.primary_device).length;
-    const withNiche = leads.filter(l => !l.primary_device && l.niche).length;
-    const unclassified = leads.filter(l => !l.primary_device && !l.niche).length;
+    const withNiche = leads.filter(l => !l.primary_device && l.niche && !l.fetch_failed).length;
+    const unclassified = leads.filter(l => !l.primary_device && !l.niche && !l.fetch_failed).length;
+    const unreachable = leads.filter(l => l.fetch_failed).length;
     const totalMismatches = leads.filter(l => l.niche_mismatch).length;
-    return { total: leads.length, withDevice, withNiche, unclassified, totalMismatches };
+    // enrichable = anything we haven't yet successfully fetched from
+    // (i.e. never attempted). Fetch-failed leads are deliberately excluded
+    // because we already know the site is dead.
+    const enrichable = leads.filter(l => !l.enrichment_attempted).length;
+    return { total: leads.length, withDevice, withNiche, unclassified, unreachable, totalMismatches, enrichable };
   }, [leads]);
 
   // ─── Bulk actions ─────────────────────────────
@@ -246,11 +272,16 @@ export default function ProspectSweepPage() {
   // we re-merge the fresh enrichment into local state without reloading
   // the whole page. Cancel button lets the operator stop mid-run.
   const enrichLeads = async (targetLeads: EnrichedLead[], contextLabel: string) => {
-    // Only enrich leads that don't already have devices_found data
-    const toEnrich = targetLeads.filter(l => !l.devices_found || l.devices_found.length === 0);
+    // Skip:
+    //  - leads that already have device data (nothing to gain)
+    //  - leads whose fetch previously failed (site is dead; retrying wastes calls)
+    const toEnrich = targetLeads.filter(l => !l.fetch_failed && (!l.devices_found || l.devices_found.length === 0));
+    const skippedFailed = targetLeads.filter(l => l.fetch_failed).length;
     if (toEnrich.length === 0) {
-      setToast('These leads are already enriched.');
-      setTimeout(() => setToast(null), 3000);
+      setToast(skippedFailed > 0
+        ? `Nothing to enrich — ${skippedFailed} lead${skippedFailed === 1 ? '' : 's'} skipped (website previously unreachable).`
+        : 'These leads are already enriched.');
+      setTimeout(() => setToast(null), 4000);
       return;
     }
     const total = toEnrich.length;
@@ -303,7 +334,10 @@ export default function ProspectSweepPage() {
 
   // The three enrich entry points — same underlying batch runner
   const enrichAllUnenriched = () => {
-    const unenriched = leads.filter(l => !l.devices_found || l.devices_found.length === 0);
+    // Only leads never attempted OR attempted successfully with no devices.
+    // Fetch-failed leads filtered inside enrichLeads() anyway; this makes
+    // the intent explicit at the call site.
+    const unenriched = leads.filter(l => !l.fetch_failed && (!l.devices_found || l.devices_found.length === 0));
     enrichLeads(unenriched, 'the full sweep');
   };
   const enrichGroup = (group: Group) => {
@@ -395,7 +429,7 @@ export default function ProspectSweepPage() {
 
       {/* Summary */}
       {!loading && leads.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
           <div className="card p-3">
             <p className="text-[10px] font-mono text-prospex-dim uppercase">Total swept</p>
             <p className="text-2xl font-mono font-bold text-prospex-text">{summary.total}</p>
@@ -409,27 +443,33 @@ export default function ProspectSweepPage() {
             <p className="text-2xl font-mono font-bold text-prospex-muted">{summary.withNiche}</p>
           </div>
           <div className={cn('card p-3', summary.totalMismatches > 0 && 'border-amber-500/30')}>
-            <p className="text-[10px] font-mono text-prospex-dim uppercase">⚠ Niche mismatches</p>
+            <p className="text-[10px] font-mono text-prospex-dim uppercase">⚠ Mismatches</p>
             <p className="text-2xl font-mono font-bold text-amber-400">{summary.totalMismatches}</p>
+          </div>
+          <div className={cn('card p-3', summary.unreachable > 0 && 'border-prospex-red/30')}>
+            <p className="text-[10px] font-mono text-prospex-dim uppercase" title="Websites we previously tried to fetch and failed. Skipped from future enrichment.">❌ Unreachable</p>
+            <p className="text-2xl font-mono font-bold text-prospex-red/80">{summary.unreachable}</p>
           </div>
         </div>
       )}
 
-      {/* Top-level enrich CTA — appears when there are leads without device data.
-          Estimated time is honest: each lead's website fetch is ~5-10s. */}
-      {!loading && !enrichRunning && leads.length > 0 && (leads.length - summary.withDevice) > 0 && (
+      {/* Top-level enrich CTA — appears when there are leads that haven't been
+          enrichment-attempted yet. Fetch-failed leads intentionally excluded
+          from the count so the number matches what "Enrich all" actually acts on. */}
+      {!loading && !enrichRunning && summary.enrichable > 0 && (
         <div className="card p-3 border-amber-500/30 bg-amber-500/5 flex flex-wrap items-center gap-3">
           <div className="flex-1 min-w-0">
             <p className="text-xs font-mono text-amber-400">
-              🔬 {(leads.length - summary.withDevice).toLocaleString()} lead{leads.length - summary.withDevice === 1 ? '' : 's'} in this sweep have no device data yet
+              🔬 {summary.enrichable.toLocaleString()} lead{summary.enrichable === 1 ? '' : 's'} in this sweep have no device data yet
             </p>
             <p className="text-[10px] text-prospex-dim mt-0.5">
-              Enrich them now to unlock device grouping. Runs serially — approx {Math.ceil((leads.length - summary.withDevice) * 8 / 60)} min for the full batch. Cancel anytime.
+              Enrich them now to unlock device grouping. Runs serially — approx {Math.ceil(summary.enrichable * 8 / 60)} min for the full batch. Cancel anytime.
+              {summary.unreachable > 0 && <> · <span className="text-prospex-red/80">{summary.unreachable} known-unreachable lead{summary.unreachable === 1 ? '' : 's'} skipped automatically.</span></>}
             </p>
           </div>
           <button onClick={enrichAllUnenriched}
             className="btn text-xs md:text-sm bg-amber-500/20 text-amber-400 border border-amber-500/40 hover:bg-amber-500/30 min-h-[40px]">
-            <Zap className="w-4 h-4 md:w-3.5 md:h-3.5" /> Enrich all {leads.length - summary.withDevice}
+            <Zap className="w-4 h-4 md:w-3.5 md:h-3.5" /> Enrich all {summary.enrichable}
           </button>
         </div>
       )}
@@ -481,6 +521,7 @@ export default function ProspectSweepPage() {
             const isUpdatingNiche = updatingNicheKey === g.key;
             const kindClass = g.kind === 'device' ? 'border-prospex-cyan/30 bg-prospex-cyan/5'
               : g.kind === 'niche' ? 'border-prospex-border'
+              : g.kind === 'unreachable' ? 'border-prospex-red/30 bg-prospex-red/5'
               : 'border-amber-500/30 bg-amber-500/5';
             return (
               <div key={g.key} className={cn('card border', kindClass)}>
