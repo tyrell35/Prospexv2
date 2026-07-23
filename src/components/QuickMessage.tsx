@@ -187,7 +187,7 @@ export default function QuickMessage({ isOpen, onClose, channel, lead }: QuickMe
    const handle = lead.instagram_url?.replace(/https?:\/\/(www\.)?instagram\.com\/?/, '').replace(/\/$/, '') || '';
    navigator.clipboard.writeText(message);
    setCopied(true);
-   if (handle) window.open(`https://ig.me/m/${handle}`, '_blank');
+   if (handle) window.open(`https://www.instagram.com/${handle}/`, '_blank');
    else if (lead.instagram_url) window.open(lead.instagram_url, '_blank');
   }
   setSent(true);

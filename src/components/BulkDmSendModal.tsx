@@ -125,10 +125,13 @@ function extractIgHandle(lead: Lead): string | null {
   return null;
 }
 
-// Best deep-link to a DM composer on Instagram — ig.me/m/<handle> takes
-// the user directly to that user's inbox on both mobile and web.
+// Open Instagram to the target user's profile. Previously used
+// `ig.me/m/<handle>` (native app DM shortcut) but on desktop web that
+// unreliably falls back to instagram.com home page. Profile URL always
+// resolves — user clicks "Message" from the profile (one extra tap) and
+// lands in the DM composer with the recipient already selected.
 function igDmLink(handle: string): string {
-  return `https://ig.me/m/${handle}`;
+  return `https://www.instagram.com/${handle}/`;
 }
 
 // Normalize a phone to E.164 digits-only (no leading +). Strips spaces,
@@ -404,7 +407,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   }, [current?.sender_account]);
 
   // ─── Open in the channel's native app ─────────
-  // IG: opens ig.me/m/<handle> — user has to paste the message
+  // IG: opens the target user's profile — one click on Message opens DM composer
   // WA: opens wa.me/<phone>?text=<encoded> — message prefills automatically
   // In grouped IG mode, blocked until the operator confirms they've switched
   // to the correct account (guards against 30 sends going out from the wrong @).
@@ -751,7 +754,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   {isIg && sendOrder === 'grouped' && !switchAcknowledged
                     ? <>🔒 Confirm account switch first</>
                     : isIg
-                      ? (copied ? <><Check className="w-4 h-4" /> Copied · IG opened → paste + send</> : <><Instagram className="w-4 h-4" /> Open in Instagram (O)</>)
+                      ? (copied ? <><Check className="w-4 h-4" /> Copied · click <strong>Message</strong> on profile → paste → send</> : <><Instagram className="w-4 h-4" /> Open @{currentContact} profile (O)</>)
                       : <><MessageCircle className="w-4 h-4" /> Open in WhatsApp Web (O) · message auto-prefills</>
                   }
                 </button>

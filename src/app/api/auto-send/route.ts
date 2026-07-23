@@ -704,7 +704,7 @@ export async function GET(req: NextRequest) {
           channel: item.channel,
           message: item.message_body,
           dm_link: item.channel === 'instagram'
-            ? `https://ig.me/m/${item.contact_handle}`
+            ? `https://www.instagram.com/${item.contact_handle}/`
             : item.channel === 'whatsapp'
             ? `https://wa.me/${item.contact_handle.replace(/[^0-9]/g, '')}`
             : null,

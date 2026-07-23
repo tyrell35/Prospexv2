@@ -94,7 +94,7 @@ function buildOpenUrl(lead: BlasterLead, channel: 'whatsapp' | 'instagram', mess
   }
   const url = lead.instagram_url || '';
   const handleMatch = url.replace(/https?:\/\/(www\.)?instagram\.com\/?/, '').replace(/\/$/, '').split('/')[0];
-  if (handleMatch) return `https://ig.me/m/${handleMatch}`;
+  if (handleMatch) return `https://www.instagram.com/${handleMatch}/`;
   return url || null;
 }
 

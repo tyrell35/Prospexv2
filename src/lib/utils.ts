@@ -84,9 +84,22 @@ export function getWhatsAppUrl(phone: string, message?: string): string {
   return `https://wa.me/${cleaned}?text=${encodeURIComponent(msg)}`;
 }
 
-export function getInstagramDMUrl(instagramUrl: string): string {
-  const handle = instagramUrl.replace(/https?:\/\/(www\.)?instagram\.com\/?/, '').replace(/\/$/, '');
-  return `https://ig.me/m/${handle}`;
+/**
+ * Open Instagram to a specific user's profile — the most reliable path
+ * to a DM composer. Was `ig.me/m/<handle>` which is designed for the
+ * mobile app; on desktop web that link often redirects to the IG home
+ * page (bug reported by user). Profile URL always resolves, and one
+ * click on "Message" from the profile opens the composer.
+ *
+ * Accepts either a full instagram.com URL, an @handle, or a bare handle.
+ */
+export function getInstagramDMUrl(instagramUrlOrHandle: string): string {
+  const handle = instagramUrlOrHandle
+    .replace(/https?:\/\/(www\.)?instagram\.com\//i, '')
+    .replace(/^@/, '')
+    .split(/[/?#]/)[0]
+    .trim();
+  return `https://www.instagram.com/${handle}/`;
 }
 
 export const PIPELINE_STAGES = [

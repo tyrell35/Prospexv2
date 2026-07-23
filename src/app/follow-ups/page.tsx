@@ -108,7 +108,7 @@ function buildOpenUrl(item: QueueItem): string | null {
   if (ch === 'instagram') {
     const url = lead.instagram_url || '';
     const handle = lead.instagram_handle || url.replace(/https?:\/\/(www\.)?instagram\.com\/?/, '').replace(/\/$/, '').split('/')[0];
-    if (handle) return `https://ig.me/m/${handle}`;
+    if (handle) return `https://www.instagram.com/${handle}/`;
     return url || null;
   }
   // SMS — no universal URL, copy + flag
