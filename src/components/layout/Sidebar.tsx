@@ -3,12 +3,13 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Send, Shield, Settings, Menu, X, LogOut, Rocket, Clock, Target, Trophy, Flame } from 'lucide-react';
+import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Send, Shield, Settings, Menu, X, LogOut, Rocket, Clock, Target, Trophy, Flame, Microscope } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth-context';
 
 const navigation = [
   { name: '🔥 Hot List', href: '/hotlist', icon: Flame },
+  { name: '🔬 Prospect Sweep', href: '/prospect-sweep', icon: Microscope },
   { name: 'Lead Scraping', href: '/city-scraper', icon: Search },
   { name: 'Instagram Scraper', href: '/instagram-scrape', icon: Camera },
   { name: 'Lead Database', href: '/leads', icon: Database },
