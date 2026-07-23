@@ -265,72 +265,74 @@ export default function HotListPage() {
               {rankBadge && <span className="text-[11px] font-mono text-orange-400 flex-shrink-0">{rankBadge}</span>}
               <p className="text-sm font-mono font-bold text-prospex-text truncate">{l.business_name}</p>
             </div>
-            <div className="flex items-center gap-2 flex-wrap text-[10px] text-prospex-dim">
-              <span className="flex items-center gap-0.5"><MapPin className="w-2.5 h-2.5" /> {l.city || '—'}{l.county ? `, ${l.county}` : ''}</span>
-              <span className="flex items-center gap-0.5 text-amber-400">
-                <Star className="w-2.5 h-2.5 fill-amber-400" /> {l.google_rating?.toFixed(1) || '—'}
+            <div className="flex items-center gap-2 flex-wrap text-xs md:text-[10px] text-prospex-dim">
+              <span className="flex items-center gap-1"><MapPin className="w-3 h-3 md:w-2.5 md:h-2.5" /> {l.city || '—'}{l.county ? `, ${l.county}` : ''}</span>
+              <span className="flex items-center gap-1 text-amber-400">
+                <Star className="w-3 h-3 md:w-2.5 md:h-2.5 fill-amber-400" /> {l.google_rating?.toFixed(1) || '—'}
                 <span className="text-prospex-dim ml-0.5">({l.google_review_count || 0})</span>
               </span>
               {l.niche && <span className="text-prospex-muted">· {l.niche}</span>}
             </div>
           </div>
           <div className="flex-shrink-0 flex items-center gap-1">
-            {/* Pin toggle */}
+            {/* Pin toggle — 44px tap area on mobile */}
             <button
               onClick={e => { e.stopPropagation(); togglePin(l); }}
               disabled={pinBusy === l.id}
-              className={cn('p-1 rounded transition-colors',
+              className={cn('p-2 md:p-1 rounded transition-colors min-w-[36px] min-h-[36px] md:min-w-0 md:min-h-0 flex items-center justify-center',
                 isPinned ? 'text-orange-400 hover:text-orange-300' : 'text-prospex-dim hover:text-orange-400')}
               title={isPinned ? 'Unpin from Hot List' : 'Pin to Hot List'}>
-              {pinBusy === l.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : isPinned ? <Pin className="w-3.5 h-3.5 fill-orange-400" /> : <PinOff className="w-3.5 h-3.5" />}
+              {pinBusy === l.id ? <Loader2 className="w-4 h-4 md:w-3.5 md:h-3.5 animate-spin" /> : isPinned ? <Pin className="w-4 h-4 md:w-3.5 md:h-3.5 fill-orange-400" /> : <PinOff className="w-4 h-4 md:w-3.5 md:h-3.5" />}
             </button>
             <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(l.id)}
               onClick={e => e.stopPropagation()}
-              className="rounded border-orange-500/40 bg-prospex-bg accent-orange-400" />
+              className="w-5 h-5 md:w-4 md:h-4 rounded border-orange-500/40 bg-prospex-bg accent-orange-400" />
           </div>
         </div>
 
         {/* Device chip + channel availability + Quick DM */}
         <div className="flex items-center gap-2 flex-wrap mt-2">
           {l.device_tier === 'A' && (
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-prospex-cyan/40 bg-prospex-cyan/10 text-prospex-cyan" title={l.device_summary}>
+            <span className="text-[10px] md:text-[9px] font-mono px-2 py-1 md:px-1.5 md:py-0.5 rounded border border-prospex-cyan/40 bg-prospex-cyan/10 text-prospex-cyan" title={l.device_summary}>
               🔥 Tier A · {l.device_summary || 'device'}
             </span>
           )}
           {l.device_tier === 'B' && (
-            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-400" title={l.device_summary}>
+            <span className="text-[10px] md:text-[9px] font-mono px-2 py-1 md:px-1.5 md:py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-400" title={l.device_summary}>
               Tier B · {l.device_summary || 'device'}
             </span>
           )}
-          {mode === 'ranked' && <span className="text-[9px] font-mono text-prospex-dim">score {l.score}</span>}
-          <div className="ml-auto flex items-center gap-1" data-quick-dm>
-            {/* Quick DM shortcut */}
+          {mode === 'ranked' && <span className="text-[10px] md:text-[9px] font-mono text-prospex-dim">score {l.score}</span>}
+          <div className="ml-auto flex items-center gap-1.5 md:gap-1" data-quick-dm>
+            {/* Quick DM shortcut — larger tap target on mobile */}
             <button
               onClick={e => { e.stopPropagation(); setQuickDmForId(quickOpen ? null : l.id); }}
-              className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-orange-500/40 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 flex items-center gap-1"
+              className="text-[10px] md:text-[9px] font-mono px-2.5 py-1.5 md:px-1.5 md:py-0.5 min-h-[32px] md:min-h-0 rounded border border-orange-500/40 bg-orange-500/10 text-orange-400 hover:bg-orange-500/20 flex items-center gap-1"
               title="Quick DM · pick a template and send now">
-              <Zap className="w-2.5 h-2.5" /> Quick DM
+              <Zap className="w-3 h-3 md:w-2.5 md:h-2.5" /> Quick DM
             </button>
-            {hasIg && !hasWa && <Instagram className="w-2.5 h-2.5 text-pink-400" />}
-            {hasWa && !hasIg && <MessageCircle className="w-2.5 h-2.5 text-green-400" />}
+            {hasIg && !hasWa && <Instagram className="w-3 h-3 md:w-2.5 md:h-2.5 text-pink-400" />}
+            {hasWa && !hasIg && <MessageCircle className="w-3 h-3 md:w-2.5 md:h-2.5 text-green-400" />}
             <Link href={`/leads/${l.id}`} onClick={e => e.stopPropagation()}
-              className="text-[9px] text-prospex-dim hover:text-prospex-text flex items-center gap-0.5" title="Open full lead page">
-              <ExternalLink className="w-2.5 h-2.5" />
+              className="text-prospex-dim hover:text-prospex-text flex items-center min-w-[32px] min-h-[32px] md:min-w-0 md:min-h-0 justify-center" title="Open full lead page">
+              <ExternalLink className="w-3.5 h-3.5 md:w-2.5 md:h-2.5" />
             </Link>
           </div>
         </div>
 
-        {/* Quick DM popover */}
+        {/* Quick DM popover.
+            Mobile: full-width bottom sheet (fixed to bottom of viewport)
+            Desktop: absolute popover anchored to card */}
         {quickOpen && (
           <div data-quick-dm onClick={e => e.stopPropagation()}
-            className="absolute right-2 top-full mt-1 z-30 w-72 card bg-prospex-surface border-orange-500/40 shadow-xl p-2 space-y-2">
+            className="fixed md:absolute inset-x-0 bottom-0 md:inset-auto md:right-2 md:top-full md:bottom-auto md:mt-1 z-40 md:z-30 w-full md:w-72 max-w-full card bg-prospex-surface border-orange-500/40 shadow-xl p-3 md:p-2 space-y-2 rounded-b-none md:rounded-lg">
             {hasIg && (
               <div>
                 <p className="text-[9px] font-mono text-pink-400 uppercase mb-1 flex items-center gap-1"><Instagram className="w-2.5 h-2.5" /> Instagram</p>
                 <div className="space-y-0.5 max-h-40 overflow-y-auto">
                   {igTemplates.slice(0, 8).map(t => (
                     <button key={t.id} onClick={() => quickDm(l, 'instagram', t.content)}
-                      className="w-full text-left text-[10px] px-1.5 py-1 rounded hover:bg-pink-500/10 text-prospex-text truncate">
+                      className="w-full text-left text-xs md:text-[10px] px-2 py-2 md:py-1 rounded hover:bg-pink-500/10 text-prospex-text truncate min-h-[36px] md:min-h-0">
                       {t.category ? <span className="text-prospex-dim">[{t.category}] </span> : null}{t.name}
                     </button>
                   ))}
@@ -344,7 +346,7 @@ export default function HotListPage() {
                 <div className="space-y-0.5 max-h-40 overflow-y-auto">
                   {waTemplates.slice(0, 8).map(t => (
                     <button key={t.id} onClick={() => quickDm(l, 'whatsapp', t.content)}
-                      className="w-full text-left text-[10px] px-1.5 py-1 rounded hover:bg-green-500/10 text-prospex-text truncate">
+                      className="w-full text-left text-xs md:text-[10px] px-2 py-2 md:py-1 rounded hover:bg-green-500/10 text-prospex-text truncate min-h-[36px] md:min-h-0">
                       {t.category ? <span className="text-prospex-dim">[{t.category}] </span> : null}{t.name}
                     </button>
                   ))}
@@ -444,27 +446,31 @@ export default function HotListPage() {
         </span>
       </div>}
 
-      {/* Bulk action bar — the whole point of this page */}
-      <div className="card p-3 flex flex-wrap items-center gap-2 border-orange-500/30">
-        <span className="text-[10px] font-mono text-prospex-dim uppercase">Send to selected</span>
-        <button
-          onClick={() => setBlastChannel('instagram')}
-          disabled={igCount === 0}
-          className="btn text-xs bg-gradient-to-r from-pink-500/30 to-fuchsia-500/30 text-pink-300 border border-pink-500/50 hover:from-pink-500/40 hover:to-fuchsia-500/40 disabled:opacity-40"
-          title="Fast IG Blast — round-robin across warm accounts, one-tap send">
-          <Rocket className="w-3.5 h-3.5" /> 🚀 Fast IG ({igCount})
-        </button>
-        <button
-          onClick={() => setBlastChannel('whatsapp')}
-          disabled={waCount === 0}
-          className="btn text-xs bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-300 border border-green-500/50 hover:from-green-500/40 hover:to-emerald-500/40 disabled:opacity-40"
-          title="Fast WA — wa.me deep links with prefilled message per lead">
-          <MessageCircle className="w-3.5 h-3.5" /> 💬 Fast WA ({waCount})
-        </button>
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={selectAll} className="text-[10px] text-prospex-cyan hover:underline">Select all</button>
+      {/* Bulk action bar — the whole point of this page.
+          Mobile: stacks buttons full-width so they're tap-friendly.
+          Desktop: inline row with select-all/clear on the right. */}
+      <div className="card p-3 border-orange-500/30 space-y-2 md:space-y-0 md:flex md:flex-wrap md:items-center md:gap-2">
+        <span className="text-[10px] font-mono text-prospex-dim uppercase block md:inline">Send to selected</span>
+        <div className="flex flex-col md:flex-row gap-2 md:contents">
+          <button
+            onClick={() => setBlastChannel('instagram')}
+            disabled={igCount === 0}
+            className="btn text-sm md:text-xs min-h-[44px] md:min-h-0 bg-gradient-to-r from-pink-500/30 to-fuchsia-500/30 text-pink-300 border border-pink-500/50 hover:from-pink-500/40 hover:to-fuchsia-500/40 disabled:opacity-40 justify-center"
+            title="Fast IG Blast — round-robin across warm accounts, one-tap send">
+            <Rocket className="w-4 h-4" /> 🚀 Fast IG ({igCount})
+          </button>
+          <button
+            onClick={() => setBlastChannel('whatsapp')}
+            disabled={waCount === 0}
+            className="btn text-sm md:text-xs min-h-[44px] md:min-h-0 bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-300 border border-green-500/50 hover:from-green-500/40 hover:to-emerald-500/40 disabled:opacity-40 justify-center"
+            title="Fast WA — wa.me deep links with prefilled message per lead">
+            <MessageCircle className="w-4 h-4" /> 💬 Fast WA ({waCount})
+          </button>
+        </div>
+        <div className="md:ml-auto flex items-center justify-end gap-3 md:gap-2 pt-1 md:pt-0">
+          <button onClick={selectAll} className="text-xs md:text-[10px] text-prospex-cyan hover:underline min-h-[32px] px-2">Select all</button>
           <span className="text-prospex-dim">·</span>
-          <button onClick={selectNone} className="text-[10px] text-prospex-dim hover:text-prospex-text">Clear</button>
+          <button onClick={selectNone} className="text-xs md:text-[10px] text-prospex-dim hover:text-prospex-text min-h-[32px] px-2">Clear</button>
         </div>
       </div>
 

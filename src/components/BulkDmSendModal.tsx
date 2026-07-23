@@ -510,23 +510,23 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
       <div ref={containerRef} className={cn('card bg-prospex-surface max-w-3xl w-full max-h-[92vh] flex flex-col', channelMeta.border)} onClick={e => e.stopPropagation()}>
 
         {/* Header */}
-        <div className="p-4 border-b border-prospex-border flex items-center justify-between flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Rocket className={cn('w-5 h-5', channelMeta.color)} />
-            <div>
-              <h2 className="text-sm font-mono font-bold text-prospex-text">Fast {channelMeta.label} Sender</h2>
-              <p className="text-[10px] text-prospex-dim">
+        <div className="p-3 md:p-4 border-b border-prospex-border flex items-center justify-between flex-shrink-0 gap-2">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <Rocket className={cn('w-5 h-5 flex-shrink-0', channelMeta.color)} />
+            <div className="min-w-0 flex-1">
+              <h2 className="text-sm font-mono font-bold text-prospex-text truncate">Fast {channelMeta.label}</h2>
+              <p className="text-[10px] text-prospex-dim leading-tight">
                 {phase === 'setup' && (isIg
-                  ? `${eligibleLeads.length} of ${leads.length} leads have an IG handle · ${totalCapacity} sends available today across ${accountCapacity.length} warm account${accountCapacity.length === 1 ? '' : 's'}`
-                  : `${eligibleLeads.length} of ${leads.length} leads have a valid phone · safe daily cap ${WHATSAPP_SAFE_DAILY_CAP}/day from personal WhatsApp Web`
+                  ? <>{eligibleLeads.length} of {leads.length} leads · {totalCapacity} sends left today<span className="hidden md:inline"> across {accountCapacity.length} warm account{accountCapacity.length === 1 ? '' : 's'}</span></>
+                  : <>{eligibleLeads.length} of {leads.length} leads · cap {WHATSAPP_SAFE_DAILY_CAP}/day<span className="hidden md:inline"> from personal WhatsApp Web</span></>
                 )}
-                {phase === 'run' && `Lead ${currentIndex + 1} of ${queue.length} · Space=Sent · S=Skip · B=Blocked · O=Open ${isIg ? 'IG' : 'WA'} · ←/→=Nav`}
+                {phase === 'run' && <>Lead {currentIndex + 1} of {queue.length}<span className="hidden md:inline"> · Space=Sent · S=Skip · B=Blocked · O=Open {isIg ? 'IG' : 'WA'}</span></>}
                 {phase === 'done' && 'Session complete'}
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="text-prospex-dim hover:text-prospex-text p-1.5 rounded" title="Close">
-            <X className="w-4 h-4" />
+          <button onClick={onClose} className="text-prospex-dim hover:text-prospex-text p-2 rounded flex-shrink-0 min-w-[40px] min-h-[40px] flex items-center justify-center" title="Close">
+            <X className="w-5 h-5 md:w-4 md:h-4" />
           </button>
         </div>
 
@@ -761,32 +761,36 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   </p>
                 )}
 
-                <div className="grid grid-cols-3 gap-2">
+                {/* Mobile: Sent is full-width primary, Skip + Blocked share a smaller row.
+                    That way the main "I did it" tap target is unmissably thumb-sized. */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                   <button onClick={() => logAndAdvance('sent')} disabled={logging}
-                    className="flex items-center justify-center gap-1.5 bg-prospex-green/20 text-prospex-green border border-prospex-green/40 hover:bg-prospex-green/30 py-2.5 rounded font-mono text-xs disabled:opacity-50">
-                    {logging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Sent (␣)
+                    className="col-span-1 md:col-span-1 flex items-center justify-center gap-2 bg-prospex-green/20 text-prospex-green border border-prospex-green/40 hover:bg-prospex-green/30 py-3 md:py-2.5 rounded font-mono text-sm md:text-xs min-h-[48px] md:min-h-0 disabled:opacity-50">
+                    {logging ? <Loader2 className="w-4 h-4 md:w-3.5 md:h-3.5 animate-spin" /> : <Check className="w-4 h-4 md:w-3.5 md:h-3.5" />} Sent (␣)
                   </button>
-                  <button onClick={() => logAndAdvance('skipped')} disabled={logging}
-                    className="flex items-center justify-center gap-1.5 bg-prospex-bg text-prospex-muted border border-prospex-border hover:text-prospex-text py-2.5 rounded font-mono text-xs disabled:opacity-50">
-                    <SkipForward className="w-3.5 h-3.5" /> Skip (S)
-                  </button>
-                  <button onClick={() => logAndAdvance('blocked')} disabled={logging}
-                    className="flex items-center justify-center gap-1.5 bg-prospex-red/10 text-prospex-red border border-prospex-red/30 hover:bg-prospex-red/20 py-2.5 rounded font-mono text-xs disabled:opacity-50">
-                    <Ban className="w-3.5 h-3.5" /> Blocked (B)
-                  </button>
+                  <div className="grid grid-cols-2 gap-2 md:contents">
+                    <button onClick={() => logAndAdvance('skipped')} disabled={logging}
+                      className="flex items-center justify-center gap-1.5 bg-prospex-bg text-prospex-muted border border-prospex-border hover:text-prospex-text py-3 md:py-2.5 rounded font-mono text-xs min-h-[44px] md:min-h-0 disabled:opacity-50">
+                      <SkipForward className="w-3.5 h-3.5" /> Skip (S)
+                    </button>
+                    <button onClick={() => logAndAdvance('blocked')} disabled={logging}
+                      className="flex items-center justify-center gap-1.5 bg-prospex-red/10 text-prospex-red border border-prospex-red/30 hover:bg-prospex-red/20 py-3 md:py-2.5 rounded font-mono text-xs min-h-[44px] md:min-h-0 disabled:opacity-50">
+                      <Ban className="w-3.5 h-3.5" /> Blocked (B)
+                    </button>
+                  </div>
                 </div>
 
                 {/* Nav */}
                 <div className="flex items-center justify-between mt-1">
                   <button onClick={() => setCurrentIndex(i => Math.max(0, i - 1))} disabled={currentIndex === 0}
-                    className="text-[10px] text-prospex-dim hover:text-prospex-text disabled:opacity-40 flex items-center gap-1">
-                    <ChevronLeft className="w-3 h-3" /> Previous
+                    className="text-xs md:text-[10px] text-prospex-dim hover:text-prospex-text disabled:opacity-40 flex items-center gap-1 min-h-[36px] px-2">
+                    <ChevronLeft className="w-4 h-4 md:w-3 md:h-3" /> Previous
                   </button>
-                  <span className="text-[10px] font-mono text-prospex-dim">
+                  <span className="text-xs md:text-[10px] font-mono text-prospex-dim">
                     {currentIndex + 1} / {queue.length}
                   </span>
                   <button onClick={() => setCurrentIndex(i => Math.min(queue.length - 1, i + 1))} disabled={currentIndex >= queue.length - 1}
-                    className="text-[10px] text-prospex-dim hover:text-prospex-text disabled:opacity-40 flex items-center gap-1">
+                    className="text-xs md:text-[10px] text-prospex-dim hover:text-prospex-text disabled:opacity-40 flex items-center gap-1 min-h-[36px] px-2">
                     Next <ChevronRight className="w-3 h-3" />
                   </button>
                 </div>
@@ -831,9 +835,9 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
           ) : null}
         </div>
 
-        {/* Footer */}
-        <div className="p-3 border-t border-prospex-border flex items-center justify-between flex-shrink-0">
-          <div className="text-[10px] text-prospex-dim flex items-center gap-1.5">
+        {/* Footer — stacks on mobile so the Start button is full-width + thumb-friendly */}
+        <div className="p-3 border-t border-prospex-border flex-shrink-0 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+          <div className="text-[10px] text-prospex-dim items-center gap-1.5 hidden md:flex">
             <Sparkles className="w-2.5 h-2.5" />
             {phase === 'setup' && (isIg
               ? 'You still tap "Send" inside Instagram itself — keeps accounts safe.'
@@ -841,15 +845,15 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
             {phase === 'run' && `Keyboard: Space=Sent · S=Skip · B=Blocked · O=Open ${isIg ? 'IG' : 'WA'}`}
             {phase === 'done' && 'Nice work.'}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 w-full md:w-auto">
             {phase === 'setup' && (
               <button onClick={startBulkSend} disabled={loading || !selectedTemplateId || (selectedTemplateId === 'custom' && !customTemplate.trim()) || (isIg && totalCapacity === 0)}
-                className="btn-primary text-xs disabled:opacity-50 flex items-center gap-1.5">
-                <Rocket className="w-3.5 h-3.5" /> Start · queue {Math.min(eligibleLeads.length, totalCapacity)} leads
+                className="btn-primary text-sm md:text-xs disabled:opacity-50 flex items-center justify-center gap-1.5 w-full md:w-auto min-h-[48px] md:min-h-0">
+                <Rocket className="w-4 h-4 md:w-3.5 md:h-3.5" /> Start · queue {Math.min(eligibleLeads.length, totalCapacity)} leads
               </button>
             )}
             {(phase === 'run' || phase === 'done') && (
-              <button onClick={onClose} className="btn-primary text-xs">Close</button>
+              <button onClick={onClose} className="btn-primary text-sm md:text-xs w-full md:w-auto min-h-[48px] md:min-h-0 justify-center">Close</button>
             )}
           </div>
         </div>
