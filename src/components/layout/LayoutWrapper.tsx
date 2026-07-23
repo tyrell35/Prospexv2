@@ -12,8 +12,8 @@ export default function LayoutWrapper({ children }: { children: ReactNode }) {
   }
 
   return (
-    <main className="md:ml-64 min-h-screen grid-pattern">
-      <div className="p-4 pt-[72px] md:p-6 md:pt-6">{children}</div>
+    <main className="md:ml-64 min-h-screen grid-pattern overflow-x-hidden">
+      <div className="p-4 pt-[72px] md:p-6 md:pt-6 max-w-full">{children}</div>
     </main>
   );
 }
