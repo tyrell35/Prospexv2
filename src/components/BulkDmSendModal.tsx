@@ -125,12 +125,23 @@ function extractIgHandle(lead: Lead): string | null {
   return null;
 }
 
-// Open Instagram to the target user's profile. Previously used
-// `ig.me/m/<handle>` (native app DM shortcut) but on desktop web that
-// unreliably falls back to instagram.com home page. Profile URL always
-// resolves — user clicks "Message" from the profile (one extra tap) and
-// lands in the DM composer with the recipient already selected.
-function igDmLink(handle: string): string {
+// Two ways to open Instagram to a specific user, with different reliability
+// tradeoffs. User picks their preferred primary path via the setup toggle;
+// the other one is always shown as a fallback tap.
+//
+//   igDirectDmLink  — ig.me/m/<handle>. On mobile app / IG Web with app
+//                     handoff: opens DM composer instantly (best case
+//                     0-click after landing). On desktop web without the
+//                     mobile app: unpredictable; often lands on IG home
+//                     page. Fastest when it works.
+//   igProfileLink   — instagram.com/<handle>/. Always opens the target's
+//                     profile page. User clicks Message from there (one
+//                     extra tap) and lands in the composer with recipient
+//                     locked in. 100% reliable across every browser.
+function igDirectDmLink(handle: string): string {
+  return `https://ig.me/m/${handle}`;
+}
+function igProfileLink(handle: string): string {
   return `https://www.instagram.com/${handle}/`;
 }
 
@@ -191,6 +202,9 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   const [waGapRemaining, setWaGapRemaining] = useState(0);
   // IG send-order preference — persisted so operator's choice sticks across sessions
   const [sendOrder, setSendOrder] = useState<SendOrder>('grouped');
+  // IG DM open mode — 'direct' tries ig.me/m/ first (faster if it works),
+  // 'profile' goes straight to profile URL (reliable). Persisted.
+  const [igOpenMode, setIgOpenMode] = useState<'direct' | 'profile'>('profile');
   // IG-only: has the operator confirmed they've switched to the current cluster's account?
   // Reset whenever the cluster changes. Blocks Open-in-IG until acknowledged so nobody
   // accidentally sends 30 messages from the wrong account.
@@ -208,10 +222,12 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     setWaLastSentAt(null);
     setWaGapRemaining(0);
     setSwitchAcknowledged(false);
-    // Restore preferred send order from localStorage — sticks across sessions
+    // Restore preferred send order + DM open mode from localStorage
     if (isIg && typeof window !== 'undefined') {
       const saved = window.localStorage.getItem('prospex_send_order');
       if (saved === 'round_robin' || saved === 'grouped') setSendOrder(saved);
+      const savedMode = window.localStorage.getItem('prospex_ig_open_mode');
+      if (savedMode === 'direct' || savedMode === 'profile') setIgOpenMode(savedMode);
     }
     (async () => {
       setLoading(true);
@@ -407,28 +423,49 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   }, [current?.sender_account]);
 
   // ─── Open in the channel's native app ─────────
-  // IG: opens the target user's profile — one click on Message opens DM composer
+  // IG: primary route depends on igOpenMode preference. Either way, message
+  //     is copied to clipboard first so the user can paste-and-send.
   // WA: opens wa.me/<phone>?text=<encoded> — message prefills automatically
-  // In grouped IG mode, blocked until the operator confirms they've switched
-  // to the correct account (guards against 30 sends going out from the wrong @).
+  // Grouped IG mode blocks until switchAcknowledged (safety gate).
+  const copyMessageIg = async () => {
+    if (!current) return;
+    try {
+      await navigator.clipboard.writeText(current.message);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch { /* clipboard blocked without gesture — non-fatal */ }
+  };
+
   const openInChannel = async () => {
     if (!current || !currentContact) return;
     if (isIg && sendOrder === 'grouped' && !switchAcknowledged) return;
     if (isIg) {
-      try {
-        await navigator.clipboard.writeText(current.message);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      } catch { /* clipboard blocked without gesture — no-op, IG still opens */ }
-      window.open(igDmLink(currentContact), '_blank', 'noopener,noreferrer');
+      await copyMessageIg();
+      const url = igOpenMode === 'direct' ? igDirectDmLink(currentContact) : igProfileLink(currentContact);
+      window.open(url, '_blank', 'noopener,noreferrer');
     } else {
       window.open(waDmLink(currentContact, current.message), '_blank', 'noopener,noreferrer');
     }
   };
 
+  // Fallback opener — always uses the OTHER route than what the primary
+  // tried. If primary was direct DM and landed on IG home, one click here
+  // opens the profile page instead. If primary was profile-first, this
+  // gives the operator a chance to try the direct DM shortlink.
+  const openIgFallback = async () => {
+    if (!current || !currentContact) return;
+    await copyMessageIg();
+    const url = igOpenMode === 'direct' ? igProfileLink(currentContact) : igDirectDmLink(currentContact);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
   const persistSendOrder = (v: SendOrder) => {
     setSendOrder(v);
     if (typeof window !== 'undefined') window.localStorage.setItem('prospex_send_order', v);
+  };
+  const persistIgOpenMode = (v: 'direct' | 'profile') => {
+    setIgOpenMode(v);
+    if (typeof window !== 'undefined') window.localStorage.setItem('prospex_ig_open_mode', v);
   };
 
   // ─── Log outcome + advance ────────────────────
@@ -576,6 +613,37 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                         {a.stage === 'warming' && <span className="ml-1 text-amber-400">🔥warming</span>}
                       </span>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {/* IG DM open mode — direct vs profile. Applies whether or not you're using grouped mode. */}
+              {isIg && (
+                <div>
+                  <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5">How to open Instagram</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <button onClick={() => persistIgOpenMode('profile')}
+                      className={cn('text-left p-2.5 rounded border transition-colors',
+                        igOpenMode === 'profile' ? 'bg-pink-500/10 border-pink-500/40 text-prospex-text' : 'bg-prospex-bg border-prospex-border text-prospex-muted hover:text-prospex-text')}>
+                      <p className="text-[11px] font-mono flex items-center gap-1.5">
+                        {igOpenMode === 'profile' && <Check className="w-3 h-3 text-pink-400" />}
+                        🔗 Open profile <span className="text-[9px] text-prospex-dim">(recommended)</span>
+                      </p>
+                      <p className="text-[9px] text-prospex-dim mt-0.5">
+                        Always lands on the target&apos;s profile page. Click Message → paste → send. Works on every browser.
+                      </p>
+                    </button>
+                    <button onClick={() => persistIgOpenMode('direct')}
+                      className={cn('text-left p-2.5 rounded border transition-colors',
+                        igOpenMode === 'direct' ? 'bg-pink-500/10 border-pink-500/40 text-prospex-text' : 'bg-prospex-bg border-prospex-border text-prospex-muted hover:text-prospex-text')}>
+                      <p className="text-[11px] font-mono flex items-center gap-1.5">
+                        {igOpenMode === 'direct' && <Check className="w-3 h-3 text-pink-400" />}
+                        🚀 Direct DM <span className="text-[9px] text-prospex-dim">(faster if it works)</span>
+                      </p>
+                      <p className="text-[9px] text-prospex-dim mt-0.5">
+                        Tries ig.me/m/&lt;handle&gt; — jumps straight to DM composer on mobile or if IG app is installed. Fallback button always visible if it lands on home page.
+                      </p>
+                    </button>
                   </div>
                 </div>
               )}
@@ -754,10 +822,31 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   {isIg && sendOrder === 'grouped' && !switchAcknowledged
                     ? <>🔒 Confirm account switch first</>
                     : isIg
-                      ? (copied ? <><Check className="w-4 h-4" /> Copied · click <strong>Message</strong> on profile → paste → send</> : <><Instagram className="w-4 h-4" /> Open @{currentContact} profile (O)</>)
+                      ? (copied
+                          ? (igOpenMode === 'direct'
+                              ? <><Check className="w-4 h-4" /> Copied · paste in DM → send</>
+                              : <><Check className="w-4 h-4" /> Copied · click <strong>Message</strong> on profile → paste → send</>)
+                          : (igOpenMode === 'direct'
+                              ? <><Instagram className="w-4 h-4" /> Open DM with @{currentContact} (O)</>
+                              : <><Instagram className="w-4 h-4" /> Open @{currentContact} profile (O)</>))
                       : <><MessageCircle className="w-4 h-4" /> Open in WhatsApp Web (O) · message auto-prefills</>
                   }
                 </button>
+
+                {/* Fallback: always visible when IG, one tap to try the OTHER route.
+                    Direct-DM mode users need this when ig.me lands on home page;
+                    profile-first users can use it to try the app shortcut. */}
+                {isIg && (!(sendOrder === 'grouped' && !switchAcknowledged)) && (
+                  <button onClick={openIgFallback}
+                    className="w-full text-xs text-prospex-dim hover:text-prospex-text py-2 rounded border border-prospex-border/50 hover:border-prospex-border transition-colors flex items-center justify-center gap-1.5 -mt-1"
+                    title={igOpenMode === 'direct'
+                      ? 'Didn’t land on the DM? One click opens the profile — click Message from there.'
+                      : 'Try the direct DM shortlink (works if you’re on mobile or have the IG app installed).'}>
+                    {igOpenMode === 'direct'
+                      ? <>🔗 Fallback: open profile instead</>
+                      : <>🚀 Try direct DM shortlink</>}
+                  </button>
+                )}
                 {isIg && sendOrder === 'grouped' && clusterInfo.clusterSize > 0 && (
                   <p className="text-[10px] text-prospex-dim text-center -mt-1">
                     Sending {clusterInfo.positionInCluster}/{clusterInfo.clusterSize} from @{current.sender_account} · cluster {clusterInfo.clusterIndex} of {clusterInfo.totalClusters}
