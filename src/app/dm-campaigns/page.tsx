@@ -1146,7 +1146,125 @@ skinstudio_uk, glow_medspa; ultra_beauty"
           <p className="text-sm text-prospex-muted">No IG accounts yet. Add one above.</p>
         </div>
       ) : (
-        <div className="card overflow-hidden">
+        <>
+        {/* MOBILE — card view for IG account fleet management */}
+        <div className="md:hidden space-y-2">
+          {accounts.map(a => {
+            const w = a.warmup;
+            const used = a.daily_sent_today || 0;
+            const target = w?.effective_target ?? (a.daily_target || 30);
+            const hardCap = w?.hard_limit ?? (a.daily_limit || 30);
+            const pct = target > 0 ? Math.min(100, Math.round((used / target) * 100)) : 0;
+            const stage = w?.stage || 'warm';
+            const stageMeta = {
+              new:     { icon: <Snowflake className="w-3 h-3" />, cls: 'text-prospex-dim border-prospex-border',       label: 'not started' },
+              warming: { icon: <Flame className="w-3 h-3" />,     cls: 'text-amber-400 border-amber-500/40',           label: `warming · day ${w?.days_in_warmup ?? 0}` },
+              warm:    { icon: <Flame className="w-3 h-3" />,     cls: 'text-prospex-green border-prospex-green/40',   label: 'fully warm' },
+              paused:  { icon: <Pause className="w-3 h-3" />,     cls: 'text-prospex-red border-prospex-red/40',       label: 'paused' },
+            }[stage];
+            return (
+              <div key={a.id} className="card p-3 space-y-2">
+                {/* Header: @account + stage */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-mono text-prospex-text truncate">@{a.username}</p>
+                    {a.display_name && <p className="text-[10px] text-prospex-dim truncate">{a.display_name}</p>}
+                  </div>
+                  <span className={cn('inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0', stageMeta.cls)}>
+                    {stageMeta.icon} {stageMeta.label}
+                  </span>
+                </div>
+
+                {/* Progress + counts */}
+                <div>
+                  <div className="flex justify-between text-[11px] font-mono">
+                    <span className="text-prospex-text">{used} / {target} today</span>
+                    <span className="text-prospex-dim">cap {hardCap} · {pct}%</span>
+                  </div>
+                  <div className="w-full bg-prospex-bg rounded-full h-1.5 mt-1">
+                    <div className={cn('h-1.5 rounded-full', pct >= 100 ? 'bg-prospex-green' : pct >= 80 ? 'bg-prospex-cyan' : 'bg-prospex-cyan/60')} style={{ width: `${pct}%` }} />
+                  </div>
+                  {w?.next_step_target && w?.next_step_at && (
+                    <p className="text-[10px] text-prospex-cyan flex items-center gap-1 mt-1">
+                      <Clock className="w-2.5 h-2.5" /> → {w.next_step_target}/day on {new Date(w.next_step_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                    </p>
+                  )}
+                </div>
+
+                {/* Stats grid */}
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="bg-prospex-bg rounded p-1.5">
+                    <p className="text-[9px] font-mono text-prospex-dim uppercase">Total sent</p>
+                    <p className="text-sm font-mono text-prospex-text">{a.total_sent || 0}</p>
+                  </div>
+                  <div className="bg-prospex-bg rounded p-1.5">
+                    <p className="text-[9px] font-mono text-prospex-dim uppercase">Replies</p>
+                    <p className="text-sm font-mono text-prospex-green">{a.total_replies || 0}</p>
+                  </div>
+                  <div className="bg-prospex-bg rounded p-1.5">
+                    <p className="text-[9px] font-mono text-prospex-dim uppercase">Last sent</p>
+                    <p className="text-[10px] font-mono text-prospex-dim leading-tight">{a.last_sent_at ? new Date(a.last_sent_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '—'}</p>
+                  </div>
+                </div>
+
+                {/* Editable notes hint */}
+                <input
+                  type="text"
+                  defaultValue={a.notes || ''}
+                  onBlur={e => {
+                    const v = e.target.value.trim();
+                    if (v !== (a.notes || '')) handleNotesChange(a, v);
+                  }}
+                  placeholder="📍 Chrome Profile 3 · Mobile slot 2 · ..."
+                  className="input text-[11px] py-2 px-2 w-full min-h-[36px]"
+                />
+
+                {/* Action row */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {stage === 'new' && (
+                    <button onClick={() => handleWarmup(a, 'start_warmup')}
+                      className="text-xs font-mono text-prospex-cyan px-2 py-1.5 rounded border border-prospex-cyan/40 min-h-[36px] flex-1">
+                      <Flame className="w-3 h-3 inline mr-1" /> Start warmup
+                    </button>
+                  )}
+                  {stage === 'warming' && (w?.fully_warm || (w?.days_in_warmup ?? 0) >= 14) && (
+                    <button onClick={() => handleWarmup(a, 'graduate')}
+                      className="text-xs font-mono text-prospex-green px-2 py-1.5 rounded border border-prospex-green/40 min-h-[36px] flex-1">
+                      <GraduationCap className="w-3 h-3 inline mr-1" /> Graduate
+                    </button>
+                  )}
+                  {(stage === 'warming' || stage === 'warm') && (
+                    <button onClick={() => handleWarmup(a, 'pause')}
+                      className="text-xs font-mono text-amber-400 px-3 py-1.5 rounded border border-amber-500/30 min-h-[36px] flex items-center gap-1">
+                      <Pause className="w-3 h-3" /> Pause
+                    </button>
+                  )}
+                  {stage === 'paused' && (
+                    <button onClick={() => handleWarmup(a, 'resume')}
+                      className="text-xs font-mono text-prospex-green px-3 py-1.5 rounded border border-prospex-green/30 min-h-[36px] flex items-center gap-1">
+                      <Play className="w-3 h-3" /> Resume
+                    </button>
+                  )}
+                  <select value={a.status || 'active'} onChange={e => handleStatus(a, e.target.value)}
+                    className="input text-[11px] py-1.5 px-2 flex-1 min-h-[36px]">
+                    <option value="active">active</option>
+                    <option value="warming">warming</option>
+                    <option value="paused">paused</option>
+                    <option value="resting">resting</option>
+                  </select>
+                  <button onClick={() => handleRemove(a)}
+                    className="text-prospex-dim hover:text-prospex-red p-2 min-w-[36px] min-h-[36px] flex items-center justify-center"
+                    title="Remove">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* DESKTOP — original 7-column table */}
+        <div className="card overflow-hidden hidden md:block">
           <div className="overflow-x-auto">
             <table className="w-full text-xs min-w-[960px]">
               <thead>
@@ -1259,6 +1377,7 @@ skinstudio_uk, glow_medspa; ultra_beauty"
             </table>
           </div>
         </div>
+        </>
       )}
     </div>
   );
