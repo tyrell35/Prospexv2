@@ -270,25 +270,31 @@ export default function LeadsPage() {
             <Filter className="w-3.5 h-3.5" /> Filters {activeFilterCount > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-prospex-cyan/20 text-[10px]">{activeFilterCount}</span>}
           </button>
 
-          {selectedIds.size > 0 && (<>
-            <div className="w-px h-6 bg-prospex-border" />
-            <button onClick={async () => { await fetch('/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: Array.from(selectedIds) }) }); fetchLeads(); }} className="btn-ghost text-xs" title="Score selected leads">⭐ Score ({selectedIds.size})</button>
-            <button onClick={async () => { await fetch('/api/enrich', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: Array.from(selectedIds) }) }); fetchLeads(); }} className="btn-ghost text-xs" title="Enrich emails from websites">🔍 Enrich ({selectedIds.size})</button>
-            <button
-              onClick={enrichSelected}
-              disabled={enriching}
-              title="Detect devices/machines by scanning each lead's website"
-              className="btn-ghost text-xs disabled:opacity-50"
-            >
-              {enriching ? '⏳' : '🔬'} Enrich Devices ({selectedIds.size})
-            </button>
-            <button onClick={() => setBlasterChannel('whatsapp')} className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30" title="Blast WhatsApp messages"><Zap className="w-3.5 h-3.5" /> Blast WA ({selectedIds.size})</button>
-            <button onClick={() => setBlasterChannel('instagram')} className="btn text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30" title="Blast Instagram DMs · confirm each send"><Zap className="w-3.5 h-3.5" /> Blast IG ({selectedIds.size})</button>
-            <button onClick={() => setFastBlastChannel('instagram')} className="btn text-xs bg-gradient-to-r from-pink-500/30 to-fuchsia-500/30 text-pink-300 border border-pink-500/50 hover:from-pink-500/40 hover:to-fuchsia-500/40" title="Fast Blast IG · round-robin across warm accounts, one-tap send, keyboard shortcuts">🚀 Fast IG ({selectedIds.size})</button>
-            <button onClick={() => setFastBlastChannel('whatsapp')} className="btn text-xs bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-300 border border-green-500/50 hover:from-green-500/40 hover:to-emerald-500/40" title="Fast Blast WhatsApp · opens wa.me deep link with prefilled message per lead"><MessageCircle className="w-3.5 h-3.5" /> Fast WA ({selectedIds.size})</button>
-            <button onClick={handleExportCSV} className="btn-primary text-xs"><Download className="w-3.5 h-3.5" /> Export ({selectedIds.size})</button>
-            <button onClick={handleBulkDelete} className="btn-danger text-xs"><Trash2 className="w-3.5 h-3.5" /> Delete ({selectedIds.size})</button>
-          </>)}
+          {/* Desktop-only inline bulk actions. On mobile these live in the
+              floating footer at the bottom of the page. `md:contents` makes
+              the wrapper transparent to layout so buttons keep flowing in the
+              parent flex row on desktop. */}
+          {selectedIds.size > 0 && (
+            <div className="hidden md:contents">
+              <div className="w-px h-6 bg-prospex-border" />
+              <button onClick={async () => { await fetch('/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: Array.from(selectedIds) }) }); fetchLeads(); }} className="btn-ghost text-xs" title="Score selected leads">⭐ Score ({selectedIds.size})</button>
+              <button onClick={async () => { await fetch('/api/enrich', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: Array.from(selectedIds) }) }); fetchLeads(); }} className="btn-ghost text-xs" title="Enrich emails from websites">🔍 Enrich ({selectedIds.size})</button>
+              <button
+                onClick={enrichSelected}
+                disabled={enriching}
+                title="Detect devices/machines by scanning each lead's website"
+                className="btn-ghost text-xs disabled:opacity-50"
+              >
+                {enriching ? '⏳' : '🔬'} Enrich Devices ({selectedIds.size})
+              </button>
+              <button onClick={() => setBlasterChannel('whatsapp')} className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30" title="Blast WhatsApp messages"><Zap className="w-3.5 h-3.5" /> Blast WA ({selectedIds.size})</button>
+              <button onClick={() => setBlasterChannel('instagram')} className="btn text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30" title="Blast Instagram DMs · confirm each send"><Zap className="w-3.5 h-3.5" /> Blast IG ({selectedIds.size})</button>
+              <button onClick={() => setFastBlastChannel('instagram')} className="btn text-xs bg-gradient-to-r from-pink-500/30 to-fuchsia-500/30 text-pink-300 border border-pink-500/50 hover:from-pink-500/40 hover:to-fuchsia-500/40" title="Fast Blast IG · round-robin across warm accounts, one-tap send, keyboard shortcuts">🚀 Fast IG ({selectedIds.size})</button>
+              <button onClick={() => setFastBlastChannel('whatsapp')} className="btn text-xs bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-300 border border-green-500/50 hover:from-green-500/40 hover:to-emerald-500/40" title="Fast Blast WhatsApp · opens wa.me deep link with prefilled message per lead"><MessageCircle className="w-3.5 h-3.5" /> Fast WA ({selectedIds.size})</button>
+              <button onClick={handleExportCSV} className="btn-primary text-xs"><Download className="w-3.5 h-3.5" /> Export ({selectedIds.size})</button>
+              <button onClick={handleBulkDelete} className="btn-danger text-xs"><Trash2 className="w-3.5 h-3.5" /> Delete ({selectedIds.size})</button>
+            </div>
+          )}
           {selectedIds.size === 0 && (
             <button onClick={() => setExportOpen(true)} className="btn-ghost text-xs" title="Export with country filter & format options (Standard / Meta / Skool)">
               <Download className="w-3.5 h-3.5" /> Export
@@ -400,8 +406,103 @@ export default function LeadsPage() {
         )}
       </div>
 
-      {/* Table */}
-      <div className="card overflow-hidden">
+      {/* MOBILE — card list. Renders the same data as the desktop table
+          but stacked, with a checkbox + row of action chips per card. */}
+      <div className="md:hidden space-y-2 pb-24">
+        {loading ? (
+          <div className="card p-12 text-center">
+            <div className="w-6 h-6 border-2 border-prospex-cyan/30 border-t-prospex-cyan rounded-full animate-spin mx-auto" />
+            <p className="text-xs text-prospex-dim font-mono mt-3">Loading leads...</p>
+          </div>
+        ) : leads.length === 0 ? (
+          <div className="card p-12 text-center">
+            <Database className="w-10 h-10 text-prospex-dim mx-auto mb-3" />
+            <p className="text-sm text-prospex-dim font-mono">{activeFilterCount > 0 ? 'No leads match your filters' : 'No leads found'}</p>
+            {activeFilterCount > 0
+              ? <button onClick={clearAllFilters} className="btn-primary mt-4 inline-flex">Clear Filters</button>
+              : <Link href="/search" className="btn-primary mt-4 inline-flex"><Search className="w-4 h-4" /> Start Searching</Link>}
+          </div>
+        ) : leads.map(lead => {
+          const isSelected = selectedIds.has(lead.id);
+          const hasIg = !!lead.instagram_url;
+          const hasWa = !!(lead.phone && lead.whatsapp_eligible);
+          return (
+            <div key={lead.id} onClick={() => toggleSelect(lead.id)}
+              className={cn('card p-3 cursor-pointer transition-colors',
+                isSelected ? 'border-prospex-cyan/50 bg-prospex-cyan/5' : 'active:bg-prospex-bg/50')}>
+              <div className="flex items-start gap-3">
+                <input type="checkbox" checked={isSelected} onChange={() => toggleSelect(lead.id)}
+                  onClick={e => e.stopPropagation()}
+                  className="w-5 h-5 mt-0.5 rounded border-prospex-border bg-prospex-bg accent-prospex-cyan flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  {/* Business + rating */}
+                  <div className="flex items-start justify-between gap-2">
+                    <Link href={`/leads/${lead.id}`} onClick={e => e.stopPropagation()}
+                      className="text-sm font-mono font-bold text-prospex-text hover:text-prospex-cyan transition-colors truncate flex-1">
+                      {lead.business_name}
+                    </Link>
+                    {lead.google_rating && (
+                      <span className="text-xs font-mono text-amber-400 flex items-center gap-1 flex-shrink-0">
+                        ⭐ {lead.google_rating.toFixed(1)}
+                        <span className="text-prospex-dim">({lead.google_review_count || 0})</span>
+                      </span>
+                    )}
+                  </div>
+                  {/* Meta row */}
+                  <div className="flex items-center gap-2 flex-wrap text-[11px] text-prospex-dim mt-1">
+                    <span>{lead.city || '—'}{lead.county ? `, ${lead.county}` : ''}</span>
+                    {lead.niche && <span>· {lead.niche}</span>}
+                  </div>
+                  {/* Score + priority + source */}
+                  <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                    {lead.lead_priority && <PriorityBadge priority={lead.lead_priority} />}
+                    {lead.lead_score !== null && <ScoreBadge score={lead.lead_score} />}
+                    <SourceBadge source={lead.source} />
+                  </div>
+                  {/* Channel chips — tappable direct actions */}
+                  <div className="flex items-center gap-2 mt-2.5 flex-wrap">
+                    {hasIg && (
+                      <button onClick={e => { e.stopPropagation(); setMsgLead(lead); setMsgChannel('instagram'); setMsgOpen(true); }}
+                        className="text-[11px] font-mono px-2 py-1 rounded-full border border-pink-500/30 bg-pink-500/10 text-pink-400 flex items-center gap-1 min-h-[32px]">
+                        <Instagram className="w-3 h-3" /> DM
+                      </button>
+                    )}
+                    {hasWa && (
+                      <button onClick={e => { e.stopPropagation(); setMsgLead(lead); setMsgChannel('whatsapp'); setMsgOpen(true); }}
+                        className="text-[11px] font-mono px-2 py-1 rounded-full border border-green-500/30 bg-green-500/10 text-green-400 flex items-center gap-1 min-h-[32px]">
+                        <MessageCircle className="w-3 h-3" /> WA
+                      </button>
+                    )}
+                    {lead.phone && (
+                      <a href={`tel:${lead.phone}`} onClick={e => e.stopPropagation()}
+                        className="text-[11px] font-mono px-2 py-1 rounded-full border border-prospex-border bg-prospex-bg text-prospex-muted flex items-center gap-1 min-h-[32px]">
+                        📞 Call
+                      </a>
+                    )}
+                    <Link href={`/leads/${lead.id}`} onClick={e => e.stopPropagation()}
+                      className="ml-auto text-[11px] font-mono px-2 py-1 rounded-full border border-prospex-cyan/30 bg-prospex-cyan/10 text-prospex-cyan flex items-center gap-1 min-h-[32px]">
+                      View <ExternalLink className="w-3 h-3" />
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+        {/* Mobile pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between px-2 py-3">
+            <p className="text-xs text-prospex-dim font-mono">Page {page + 1} of {totalPages} · {totalCount} total</p>
+            <div className="flex items-center gap-1">
+              <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} className="btn-ghost p-2 min-w-[44px] min-h-[44px] disabled:opacity-30"><ChevronLeft className="w-4 h-4" /></button>
+              <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1} className="btn-ghost p-2 min-w-[44px] min-h-[44px] disabled:opacity-30"><ChevronRight className="w-4 h-4" /></button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* DESKTOP — original dense table, hidden on mobile */}
+      <div className="card overflow-hidden hidden md:block">
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
@@ -496,6 +597,35 @@ export default function LeadsPage() {
 
       {/* Export Modal */}
       <ExportLeadsModal isOpen={exportOpen} onClose={() => setExportOpen(false)} />
+
+      {/* MOBILE — floating bulk action footer. Only renders when leads are
+          selected. Fixed to viewport bottom with safe-area padding for
+          iPhone home-indicator. Sticky above the sidebar's hamburger bar. */}
+      {selectedIds.size > 0 && (
+        <div className="md:hidden fixed left-0 right-0 bottom-0 z-40 bg-prospex-surface border-t border-prospex-cyan/30 shadow-2xl" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+          <div className="px-3 py-2 flex items-center justify-between border-b border-prospex-border/50">
+            <span className="text-xs font-mono text-prospex-cyan">{selectedIds.size} selected</span>
+            <button onClick={() => setSelectedIds(new Set())} className="text-xs text-prospex-dim hover:text-prospex-text px-2 min-h-[32px]">Clear</button>
+          </div>
+          <div className="grid grid-cols-2 gap-2 p-2">
+            <button onClick={() => setFastBlastChannel('instagram')}
+              className="btn text-xs bg-gradient-to-r from-pink-500/30 to-fuchsia-500/30 text-pink-300 border border-pink-500/50 justify-center min-h-[44px]">
+              🚀 Fast IG ({selectedIds.size})
+            </button>
+            <button onClick={() => setFastBlastChannel('whatsapp')}
+              className="btn text-xs bg-gradient-to-r from-green-500/30 to-emerald-500/30 text-green-300 border border-green-500/50 justify-center min-h-[44px]">
+              💬 Fast WA ({selectedIds.size})
+            </button>
+            <button onClick={async () => { await fetch('/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ leadIds: Array.from(selectedIds) }) }); fetchLeads(); }}
+              className="btn-ghost text-xs justify-center min-h-[44px]">
+              ⭐ Score
+            </button>
+            <button onClick={handleExportCSV} className="btn-primary text-xs justify-center min-h-[44px]">
+              <Download className="w-3.5 h-3.5" /> Export
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
