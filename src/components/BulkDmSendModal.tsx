@@ -310,6 +310,8 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
       return {
         username: a.username, remaining, stage: w.stage, target: w.effective_target,
         used, status: a.status, unavailable: reason !== null, reason,
+        display_name: a.display_name, notes: a.notes,
+        hard_limit: w.hard_limit,
       };
     });
   }, [accounts, isIg]);
@@ -694,31 +696,40 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                 </div>
               )}
 
-              {/* Account capacity breakdown (IG only) — every chip is a
-                  toggle. Green ring = included in this session's queue,
-                  faded = excluded. Lets the operator pick a subset of the
-                  fleet (e.g. "just @acme + @laser today, hold the rest"). */}
+              {/* Account switcher (IG only) — grid of info-rich cards.
+                  Each card shows: @username, notes hint (Chrome Profile X),
+                  sent today vs target with visual progress bar, remaining
+                  capacity, warmup stage. Click to include/exclude from
+                  the session queue. At-cap accounts are excluded from
+                  this list entirely — they appear only in the "not
+                  sending today" panel below. */}
               {isIg && availableAccounts.length > 0 && (
                 <div>
                   <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5 flex items-center justify-between gap-2 flex-wrap">
                     <span>
                       Sending from · <span className="text-prospex-cyan">{accountCapacity.length} of {availableAccounts.length} selected</span>
+                      <span className="text-prospex-dim normal-case ml-1">· click any card to toggle</span>
                     </span>
                     <span className="flex items-center gap-2">
                       <button onClick={() => setDisabledAccounts(new Set())}
-                        className="text-[10px] text-prospex-cyan hover:underline normal-case">
+                        className="text-[10px] text-prospex-cyan hover:underline normal-case min-h-[28px] px-1">
                         Select all
                       </button>
                       <span className="text-prospex-dim">·</span>
                       <button onClick={() => setDisabledAccounts(new Set(availableAccounts.map(a => a.username)))}
-                        className="text-[10px] text-prospex-dim hover:text-prospex-text normal-case">
+                        className="text-[10px] text-prospex-dim hover:text-prospex-text normal-case min-h-[28px] px-1">
                         Clear
                       </button>
                     </span>
                   </p>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                     {availableAccounts.map(a => {
                       const isDisabled = disabledAccounts.has(a.username);
+                      const pct = a.target > 0 ? Math.min(100, Math.round((a.used / a.target) * 100)) : 0;
+                      const barColor = pct >= 100 ? 'bg-prospex-green'
+                        : pct >= 80 ? 'bg-prospex-cyan'
+                        : pct >= 50 ? 'bg-amber-400'
+                        : 'bg-prospex-cyan/40';
                       return (
                         <button key={a.username}
                           onClick={() => setDisabledAccounts(prev => {
@@ -727,20 +738,49 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                             else next.add(a.username);
                             return next;
                           })}
-                          title={isDisabled ? 'Click to include in this session' : 'Click to exclude from this session'}
-                          className={cn('text-[10px] font-mono rounded px-2 py-0.5 border transition-colors min-h-[28px]',
+                          title={isDisabled ? `Click to include @${a.username} in this session` : `Click to exclude @${a.username} from this session`}
+                          className={cn('text-left rounded-lg border transition-colors p-2.5 min-h-[80px]',
                             isDisabled
-                              ? 'bg-prospex-bg border-prospex-border/50 text-prospex-dim line-through'
-                              : 'bg-prospex-cyan/10 border-prospex-cyan/40 text-prospex-text hover:bg-prospex-cyan/20')}>
-                          @{a.username} · <span className={cn('font-bold', isDisabled ? 'text-prospex-dim' : channelMeta.color)}>{a.remaining}</span> left
-                          {a.stage === 'warming' && !isDisabled && <span className="ml-1 text-amber-400">🔥</span>}
+                              ? 'bg-prospex-bg border-prospex-border/50 opacity-60 hover:opacity-100'
+                              : 'bg-prospex-cyan/5 border-prospex-cyan/40 hover:bg-prospex-cyan/10')}>
+                          <div className="flex items-start justify-between gap-1.5 mb-1">
+                            <div className="min-w-0 flex-1">
+                              <p className={cn('text-xs font-mono font-bold truncate',
+                                isDisabled ? 'text-prospex-dim line-through' : 'text-prospex-text')}>
+                                @{a.username}
+                              </p>
+                              {(a.notes || a.display_name) && (
+                                <p className="text-[9px] text-prospex-dim truncate mt-0.5" title={a.notes || a.display_name || ''}>
+                                  {a.notes || a.display_name}
+                                </p>
+                              )}
+                            </div>
+                            {a.stage === 'warming' && (
+                              <span className="text-[9px] font-mono text-amber-400 flex-shrink-0" title="Warming up — target ramps up daily">🔥 warm</span>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] font-mono mb-1">
+                            <span className={isDisabled ? 'text-prospex-dim' : 'text-prospex-muted'}>
+                              {a.used}/{a.target} sent
+                            </span>
+                            <span className={cn('font-bold', isDisabled ? 'text-prospex-dim' : channelMeta.color)}>
+                              {a.remaining} left
+                            </span>
+                          </div>
+                          <div className="w-full h-1 bg-prospex-bg rounded-full overflow-hidden">
+                            <div className={cn('h-full transition-all', isDisabled ? 'bg-prospex-border' : barColor)} style={{ width: `${pct}%` }} />
+                          </div>
+                          <div className="flex items-center justify-between text-[9px] text-prospex-dim mt-1">
+                            <span>hard cap {a.hard_limit}</span>
+                            <span>{isDisabled ? '✕ excluded' : '✓ in queue'}</span>
+                          </div>
                         </button>
                       );
                     })}
                   </div>
                   {accountCapacity.length === 0 && (
                     <p className="text-[10px] text-amber-400 mt-1.5">
-                      ⚠ No accounts selected — click any chip above to include it.
+                      ⚠ No accounts selected — click any card above to include it.
                     </p>
                   )}
                 </div>
