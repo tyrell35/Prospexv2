@@ -205,6 +205,10 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // IG DM open mode — 'direct' tries ig.me/m/ first (faster if it works),
   // 'profile' goes straight to profile URL (reliable). Persisted.
   const [igOpenMode, setIgOpenMode] = useState<'direct' | 'profile'>('profile');
+  // Turbo mode — collapses "open IG" + "log sent" + "advance" into one action.
+  // Trusts the operator to actually complete the send inside Instagram; log
+  // fires optimistically the moment Open is tapped. Persisted.
+  const [turboMode, setTurboMode] = useState(false);
   // IG-only: has the operator confirmed they've switched to the current cluster's account?
   // Reset whenever the cluster changes. Blocks Open-in-IG until acknowledged so nobody
   // accidentally sends 30 messages from the wrong account.
@@ -228,6 +232,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
       if (saved === 'round_robin' || saved === 'grouped') setSendOrder(saved);
       const savedMode = window.localStorage.getItem('prospex_ig_open_mode');
       if (savedMode === 'direct' || savedMode === 'profile') setIgOpenMode(savedMode);
+      setTurboMode(window.localStorage.getItem('prospex_turbo_mode') === '1');
     }
     (async () => {
       setLoading(true);
@@ -422,6 +427,25 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.sender_account]);
 
+  // Prefetch the next lead's IG profile page so it's warm in the browser
+  // cache before the operator taps Open. Cuts ~500-1500ms off perceived
+  // load time per lead. Fire-and-forget — no error handling needed.
+  useEffect(() => {
+    if (!isIg || phase !== 'run') return;
+    const nextIdx = currentIndex + 1;
+    if (nextIdx >= queue.length) return;
+    const nextLead = queue[nextIdx];
+    const nextHandle = leadContact(nextLead.lead, 'instagram');
+    if (!nextHandle) return;
+    const url = igOpenMode === 'direct' ? igDirectDmLink(nextHandle) : igProfileLink(nextHandle);
+    const link = document.createElement('link');
+    link.rel = 'prefetch';
+    link.href = url;
+    link.crossOrigin = 'anonymous';
+    document.head.appendChild(link);
+    return () => { document.head.removeChild(link); };
+  }, [currentIndex, queue, isIg, phase, igOpenMode]);
+
   // ─── Open in the channel's native app ─────────
   // IG: primary route depends on igOpenMode preference. Either way, message
   //     is copied to clipboard first so the user can paste-and-send.
@@ -466,6 +490,25 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   const persistIgOpenMode = (v: 'direct' | 'profile') => {
     setIgOpenMode(v);
     if (typeof window !== 'undefined') window.localStorage.setItem('prospex_ig_open_mode', v);
+  };
+  const persistTurboMode = (v: boolean) => {
+    setTurboMode(v);
+    if (typeof window !== 'undefined') window.localStorage.setItem('prospex_turbo_mode', v ? '1' : '0');
+  };
+
+  // TURBO: one action = open IG + copy message + log sent + advance.
+  // Fires the log optimistically the moment the operator taps Open, on the
+  // assumption they'll follow through with paste+send inside Instagram.
+  // If they don't, the counter over-reports for that lead — that's the
+  // knowingly-accepted trade-off for max throughput.
+  const openAndAdvance = async () => {
+    if (!current || !currentContact) return;
+    if (isIg && sendOrder === 'grouped' && !switchAcknowledged) return;
+    await openInChannel();
+    // Small tick so the new tab opens visibly before we advance in the
+    // background — avoids the "click did nothing" feel if the tab was
+    // blocked or slow. Then log + advance.
+    setTimeout(() => { logAndAdvance('sent'); }, 60);
   };
 
   // ─── Log outcome + advance ────────────────────
@@ -530,7 +573,14 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
       if (e.key === 'o' || e.key === 'O') { e.preventDefault(); openInChannel(); }
-      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); logAndAdvance('sent'); }
+      else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        // Turbo mode makes the primary key do the full cycle (open + log + advance).
+        // Standard mode keeps Space = "just log sent" so the operator can advance
+        // without re-opening a tab they already opened.
+        if (isIg && turboMode) openAndAdvance();
+        else logAndAdvance('sent');
+      }
       else if (e.key === 's' || e.key === 'S') { e.preventDefault(); logAndAdvance('skipped'); }
       else if (e.key === 'b' || e.key === 'B') { e.preventDefault(); logAndAdvance('blocked'); }
       else if (e.key === 'ArrowLeft' && currentIndex > 0) { e.preventDefault(); setCurrentIndex(i => i - 1); }
@@ -560,7 +610,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   ? <>{eligibleLeads.length} of {leads.length} leads · {totalCapacity} sends left today<span className="hidden md:inline"> across {accountCapacity.length} warm account{accountCapacity.length === 1 ? '' : 's'}</span></>
                   : <>{eligibleLeads.length} of {leads.length} leads · cap {WHATSAPP_SAFE_DAILY_CAP}/day<span className="hidden md:inline"> from personal WhatsApp Web</span></>
                 )}
-                {phase === 'run' && <>Lead {currentIndex + 1} of {queue.length}<span className="hidden md:inline"> · Space=Sent · S=Skip · B=Blocked · O=Open {isIg ? 'IG' : 'WA'}</span></>}
+                {phase === 'run' && <>Lead {currentIndex + 1} of {queue.length}<span className="hidden md:inline"> · Space={isIg && turboMode ? 'Open+Sent+Next ⚡' : 'Sent'} · S=Skip · B=Blocked · O=Open {isIg ? 'IG' : 'WA'}</span></>}
                 {phase === 'done' && 'Session complete'}
               </p>
             </div>
@@ -642,6 +692,38 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                       </p>
                       <p className="text-[9px] text-prospex-dim mt-0.5">
                         Tries ig.me/m/&lt;handle&gt; — jumps straight to DM composer on mobile or if IG app is installed. Fallback button always visible if it lands on home page.
+                      </p>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Turbo mode — for max-speed operators. Open action becomes
+                  a one-key round-trip (open → log sent → advance). */}
+              {isIg && (
+                <div>
+                  <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5">Send speed</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <button onClick={() => persistTurboMode(false)}
+                      className={cn('text-left p-2.5 rounded border transition-colors',
+                        !turboMode ? 'bg-pink-500/10 border-pink-500/40 text-prospex-text' : 'bg-prospex-bg border-prospex-border text-prospex-muted hover:text-prospex-text')}>
+                      <p className="text-[11px] font-mono flex items-center gap-1.5">
+                        {!turboMode && <Check className="w-3 h-3 text-pink-400" />}
+                        🎯 Standard <span className="text-[9px] text-prospex-dim">(2 keys per lead)</span>
+                      </p>
+                      <p className="text-[9px] text-prospex-dim mt-0.5">
+                        <kbd>O</kbd> opens IG · <kbd>Space</kbd> logs sent + advances. Log fires only when you confirm you actually sent.
+                      </p>
+                    </button>
+                    <button onClick={() => persistTurboMode(true)}
+                      className={cn('text-left p-2.5 rounded border transition-colors',
+                        turboMode ? 'bg-orange-500/10 border-orange-500/40 text-prospex-text' : 'bg-prospex-bg border-prospex-border text-prospex-muted hover:text-prospex-text')}>
+                      <p className="text-[11px] font-mono flex items-center gap-1.5">
+                        {turboMode && <Check className="w-3 h-3 text-orange-400" />}
+                        ⚡ Turbo <span className="text-[9px] text-prospex-dim">(1 key per lead)</span>
+                      </p>
+                      <p className="text-[9px] text-prospex-dim mt-0.5">
+                        <kbd>Space</kbd> opens IG + logs sent + advances all at once. Log is optimistic — trusts you to complete the send in IG.
                       </p>
                     </button>
                   </div>
@@ -847,16 +929,19 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
 
               {/* Action buttons */}
               <div className="flex flex-col gap-2">
-                <button onClick={openInChannel}
+                <button onClick={isIg && turboMode ? openAndAdvance : openInChannel}
                   disabled={isIg && sendOrder === 'grouped' && !switchAcknowledged}
                   className={cn(
                     'w-full flex items-center justify-center gap-2 border py-3 rounded-lg font-mono text-sm transition-colors',
                     isIg && sendOrder === 'grouped' && !switchAcknowledged ? 'bg-prospex-bg text-prospex-dim border-prospex-border cursor-not-allowed'
+                    : isIg && turboMode ? 'bg-gradient-to-r from-orange-500/25 to-pink-500/25 text-orange-300 border-orange-500/50 hover:from-orange-500/40 hover:to-pink-500/40'
                     : isIg ? 'bg-pink-500/20 text-pink-400 border-pink-500/40 hover:bg-pink-500/30'
                     : 'bg-green-500/20 text-green-400 border-green-500/40 hover:bg-green-500/30'
                   )}>
                   {isIg && sendOrder === 'grouped' && !switchAcknowledged
                     ? <>🔒 Confirm account switch first</>
+                    : isIg && turboMode
+                      ? <>⚡ Open @{currentContact} + Log Sent + Next (Space)</>
                     : isIg
                       ? (copied
                           ? (igOpenMode === 'direct'
@@ -970,7 +1055,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
             {phase === 'setup' && (isIg
               ? 'You still tap "Send" inside Instagram itself — keeps accounts safe.'
               : 'You still tap "Send" inside WhatsApp Web — keeps your number safe.')}
-            {phase === 'run' && `Keyboard: Space=Sent · S=Skip · B=Blocked · O=Open ${isIg ? 'IG' : 'WA'}`}
+            {phase === 'run' && `Keyboard: Space=${isIg && turboMode ? 'Open+Sent+Next ⚡' : 'Sent'} · S=Skip · B=Blocked · O=Open ${isIg ? 'IG' : 'WA'}`}
             {phase === 'done' && 'Nice work.'}
           </div>
           <div className="flex items-center gap-2 w-full md:w-auto">
