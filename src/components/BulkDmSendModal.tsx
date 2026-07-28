@@ -83,6 +83,11 @@ interface Props {
   leads: Lead[];
   channel: Channel;
   onCompleted?: (stats: { sent: number; skipped: number; blocked: number }) => void;
+  // When set, the modal opens with ONLY this account included (all others
+  // in the fleet start disabled). Used by Hot List Quick DM to pre-pick
+  // an account before opening the send flow. Operator can still toggle
+  // the others on via the switcher.
+  initialAccount?: string;
 }
 
 // Safe daily cap when cold-messaging from a single personal WhatsApp Web
@@ -180,7 +185,7 @@ function leadContact(lead: Lead, channel: Channel): string | null {
 }
 
 // ═══════════════════════════════════════════════════════
-export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCompleted }: Props) {
+export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCompleted, initialAccount }: Props) {
   const { teamMember, user } = useAuth();
   // Operator label — used to attribute each send to a specific team member
   // in outreach_logs.sent_by. Falls back to 'manual' if no auth context.
@@ -262,11 +267,18 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
             .order('username')
         : Promise.resolve({ data: [] });
       const [tpl, acc] = await Promise.all([tplP, accP]);
+      const loadedAccounts = (acc.data || []) as WarmAccount[];
       setTemplates((tpl.data || []) as DbTemplate[]);
-      setAccounts((acc.data || []) as WarmAccount[]);
+      setAccounts(loadedAccounts);
+      // If caller pre-selected a specific account (Hot List Quick DM flow),
+      // start the session with only that account included. Operator can
+      // still open others via the switcher chips.
+      if (initialAccount && isIg) {
+        setDisabledAccounts(new Set(loadedAccounts.filter(a => a.username !== initialAccount).map(a => a.username)));
+      }
       setLoading(false);
     })();
-  }, [isOpen, isIg]);
+  }, [isOpen, isIg, initialAccount]);
 
   // ─── WhatsApp: countdown timer between sends ─────────
   useEffect(() => {

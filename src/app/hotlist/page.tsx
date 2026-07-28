@@ -11,6 +11,7 @@ import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import BulkDmSendModal from '@/components/BulkDmSendModal';
 import type { Lead } from '@/lib/types';
+import { computeWarmupState } from '@/lib/ig-warmup';
 
 // ═══════════════════════════════════════════════════════
 // HOT LIST
@@ -142,6 +143,25 @@ export default function HotListPage() {
   const [igTemplates, setIgTemplates] = useState<DbTemplate[]>([]);
   const [waTemplates, setWaTemplates] = useState<DbTemplate[]>([]);
   const [quickDmForId, setQuickDmForId] = useState<string | null>(null); // lead id whose quick-DM popover is open
+  // IG accounts available for the Quick DM account picker inside the popover.
+  // Each entry carries enough info to render the same-style picker as
+  // Fast IG's account switcher, minus the multi-select toggling (Quick DM
+  // is single-lead → single-account).
+  interface QuickAccount {
+    username: string;
+    display_name: string | null;
+    notes: string | null;
+    used: number;
+    target: number;
+    remaining: number;
+    hard_limit: number;
+    stage: 'new' | 'warming' | 'warm' | 'paused';
+    blocked: boolean;
+  }
+  const [quickAccounts, setQuickAccounts] = useState<QuickAccount[]>([]);
+  const [quickAccountUsername, setQuickAccountUsername] = useState<string>('');
+  // Passed as initialAccount to BulkDmSendModal when Quick DM opens.
+  const [blastInitialAccount, setBlastInitialAccount] = useState<string | undefined>();
 
   // Load niche options + templates once
   useEffect(() => {
@@ -157,6 +177,36 @@ export default function HotListPage() {
       const all = (tpls || []) as DbTemplate[];
       setIgTemplates(all.filter(t => t.channel === 'instagram' || t.channel === 'all'));
       setWaTemplates(all.filter(t => t.channel === 'whatsapp' || t.channel === 'all'));
+
+      // Load IG accounts for the Quick DM account picker.
+      // Same computeWarmupState logic as Fast IG so eligibility is consistent.
+      const { data: accData } = await supabase.from('ig_accounts')
+        .select('username, display_name, notes, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at')
+        .order('username');
+      const enriched: QuickAccount[] = ((accData || []) as Array<{
+        username: string; display_name: string | null; notes: string | null; status: string | null;
+        daily_sent_today: number | null; daily_limit: number | null; daily_target: number | null;
+        warmup_stage: 'new' | 'warming' | 'warm' | 'paused' | null; warmup_started_at: string | null;
+      }>).map(a => {
+        const w = computeWarmupState({
+          warmup_stage: a.warmup_stage, warmup_started_at: a.warmup_started_at,
+          daily_target: a.daily_target, daily_limit: a.daily_limit,
+        });
+        const used = a.daily_sent_today || 0;
+        const remaining = Math.max(0, w.effective_target - used);
+        const blocked = (a.status && a.status !== 'active') || w.stage === 'new' || w.stage === 'paused' || used >= w.hard_limit;
+        return {
+          username: a.username, display_name: a.display_name, notes: a.notes,
+          used, target: w.effective_target, remaining, hard_limit: w.hard_limit,
+          stage: w.stage, blocked,
+        };
+      });
+      setQuickAccounts(enriched);
+      // Prefer last-used account from localStorage if it's still eligible
+      const lastAccount = typeof window !== 'undefined' ? window.localStorage.getItem('prospex_last_quick_dm_account') : null;
+      const firstEligible = enriched.find(a => a.username === lastAccount && !a.blocked)
+        || enriched.find(a => !a.blocked);
+      if (firstEligible) setQuickAccountUsername(firstEligible.username);
     })();
   }, []);
 
@@ -270,6 +320,14 @@ export default function HotListPage() {
   // on the run screen instead of the setup screen.
   const quickDm = (lead: HotLead, channel: 'instagram' | 'whatsapp', templateContent: string) => {
     localStorage.setItem(`prospex_last_template_${channel}`, templateContent);
+    // For IG, pre-select the account chosen in the popover; persist the
+    // choice so next Quick DM opens with the same account highlighted.
+    if (channel === 'instagram' && quickAccountUsername) {
+      localStorage.setItem('prospex_last_quick_dm_account', quickAccountUsername);
+      setBlastInitialAccount(quickAccountUsername);
+    } else {
+      setBlastInitialAccount(undefined);
+    }
     setBlastLeads([lead]);
     setBlastChannel(channel);
     setQuickDmForId(null);
@@ -374,6 +432,62 @@ export default function HotListPage() {
                 <p className="text-[10px] md:text-[9px] font-mono text-pink-400 uppercase mb-1.5 flex items-center gap-1 sticky top-0 bg-prospex-surface py-1 z-10">
                   <Instagram className="w-3 h-3 md:w-2.5 md:h-2.5" /> Instagram · {igTemplates.length} templates
                 </p>
+
+                {/* Account switcher — pick which @account this DM is sent from.
+                    Compact card list, single-select. At-cap / new / paused
+                    accounts shown but grayed out with reason. */}
+                {quickAccounts.length > 0 && (
+                  <div className="mb-2 pb-2 border-b border-prospex-border/30">
+                    <p className="text-[9px] font-mono text-prospex-dim uppercase mb-1 px-1">Send from</p>
+                    <div className="space-y-1 max-h-40 overflow-y-auto">
+                      {quickAccounts.map(a => {
+                        const isSelected = quickAccountUsername === a.username;
+                        const pct = a.target > 0 ? Math.min(100, Math.round((a.used / a.target) * 100)) : 0;
+                        return (
+                          <button
+                            key={a.username}
+                            disabled={a.blocked}
+                            onClick={() => setQuickAccountUsername(a.username)}
+                            title={a.blocked
+                              ? (a.stage === 'new' ? 'Warmup not started' : a.stage === 'paused' ? 'Paused' : 'At cap for today')
+                              : `${a.remaining} sends left today`}
+                            className={cn('w-full text-left rounded p-1.5 border transition-colors',
+                              a.blocked
+                                ? 'bg-prospex-bg border-prospex-border/40 opacity-50 cursor-not-allowed'
+                                : isSelected
+                                  ? 'bg-pink-500/10 border-pink-500/50'
+                                  : 'bg-prospex-bg border-prospex-border hover:border-pink-500/30')}>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className={cn('text-[10px] font-mono truncate',
+                                  a.blocked ? 'text-prospex-dim' : 'text-prospex-text')}>
+                                  {isSelected && !a.blocked && '✓ '}@{a.username}
+                                  {a.notes && <span className="text-prospex-dim text-[9px] ml-1">· {a.notes}</span>}
+                                </p>
+                              </div>
+                              <span className={cn('text-[9px] font-mono flex-shrink-0',
+                                a.blocked ? 'text-prospex-red/70'
+                                  : a.remaining <= 3 ? 'text-amber-400'
+                                  : 'text-pink-400')}>
+                                {a.blocked
+                                  ? (a.stage === 'new' ? '🆕' : a.stage === 'paused' ? '⏸' : '🔴 full')
+                                  : `${a.remaining} left`}
+                              </span>
+                            </div>
+                            {!a.blocked && (
+                              <div className="w-full h-0.5 bg-prospex-bg rounded-full mt-1">
+                                <div className={cn('h-0.5 rounded-full',
+                                  pct >= 80 ? 'bg-pink-400' : pct >= 50 ? 'bg-amber-400' : 'bg-pink-400/40')}
+                                  style={{ width: `${pct}%` }} />
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {groupTemplates(igTemplates).map(g => (
                   <div key={g.category} className="mb-2 last:mb-0">
                     <p className="text-[9px] font-mono text-prospex-dim uppercase px-1 mb-0.5">{g.label} · {g.templates.length}</p>
@@ -587,10 +701,11 @@ export default function HotListPage() {
           blastLeads is set for single-lead quick-DM; falls back to selectedLeads. */}
       <BulkDmSendModal
         isOpen={blastChannel !== null}
-        onClose={() => { setBlastChannel(null); setBlastLeads(null); }}
+        onClose={() => { setBlastChannel(null); setBlastLeads(null); setBlastInitialAccount(undefined); }}
         channel={blastChannel || 'instagram'}
         leads={blastLeads || selectedLeads}
-        onCompleted={() => { setBlastLeads(null); load(); }}
+        initialAccount={blastInitialAccount}
+        onCompleted={() => { setBlastLeads(null); setBlastInitialAccount(undefined); load(); }}
       />
     </div>
   );

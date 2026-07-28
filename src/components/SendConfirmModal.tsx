@@ -21,6 +21,7 @@ interface IgAccount {
   daily_target: number | null;
   warmup_stage: 'new' | 'warming' | 'warm' | 'paused' | null;
   warmup_started_at: string | null;
+  notes: string | null; // location hint (Chrome Profile 3, Mobile slot 2, etc.)
 }
 
 interface Props {
@@ -86,7 +87,7 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
       if (channel === 'instagram') {
         const { data } = await supabase
           .from('ig_accounts')
-          .select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at')
+          .select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at, notes')
           .in('status', ['active', 'warming'])
           .order('username');
         setAccounts((data || []) as IgAccount[]);
@@ -120,7 +121,7 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
       // reload accounts
       const { data: fresh } = await supabase
         .from('ig_accounts')
-        .select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at')
+        .select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at, notes')
         .in('status', ['active', 'warming'])
         .order('username');
       setAccounts((fresh || []) as IgAccount[]);
@@ -266,25 +267,80 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
                   <button onClick={() => { setShowAddAccount(false); setNewAccountUsername(''); }} className="btn-ghost text-xs">Cancel</button>
                 </div>
               ) : (
-                <div className="flex items-center gap-2">
-                  <select value={selectedAccount} onChange={e => setSelectedAccount(e.target.value)} className="input flex-1">
+                <>
+                  {/* Card-grid account picker — single-select radio behaviour.
+                      Same visual as Fast IG's picker so multi-user flows read
+                      identically. At-cap / new / paused accounts are shown
+                      but click-locked so operator can see WHY they can't
+                      pick them. */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
                     {accounts.map(a => {
                       const w = computeWarmupState(a);
                       const used = a.daily_sent_today || 0;
                       const remain = Math.max(0, w.effective_target - used);
                       const blocked = w.stage === 'new' || w.stage === 'paused' || used >= w.hard_limit;
-                      const stageLabel = w.stage === 'new' ? '🆕 not started' : w.stage === 'paused' ? '⏸ paused' : w.stage === 'warming' ? `🔥 warming d${w.days_in_warmup}` : '🔥 warm';
+                      const isSelected = selectedAccount === a.username;
+                      const pct = w.effective_target > 0 ? Math.min(100, Math.round((used / w.effective_target) * 100)) : 0;
+                      const barColor = pct >= 100 ? 'bg-prospex-green'
+                        : pct >= 80 ? 'bg-prospex-cyan'
+                        : pct >= 50 ? 'bg-amber-400'
+                        : 'bg-prospex-cyan/40';
+                      const stageBadge = w.stage === 'new' ? '🆕 not started'
+                        : w.stage === 'paused' ? '⏸ paused'
+                        : w.stage === 'warming' ? `🔥 warming d${w.days_in_warmup}`
+                        : '🔥 warm';
                       return (
-                        <option key={a.id} value={a.username} disabled={blocked && outcome === 'sent'}>
-                          @{a.username} · {stageLabel} · {used}/{w.effective_target}{blocked ? ' (blocked)' : ` · ${remain} left`}
-                        </option>
+                        <button
+                          key={a.id}
+                          onClick={() => { if (!blocked) setSelectedAccount(a.username); }}
+                          disabled={blocked && outcome === 'sent'}
+                          className={cn('text-left rounded-lg border transition-colors p-2.5 min-h-[80px]',
+                            blocked
+                              ? 'bg-prospex-bg border-prospex-red/20 opacity-60 cursor-not-allowed'
+                              : isSelected
+                                ? 'bg-pink-500/10 border-pink-500/60 ring-1 ring-pink-500/40'
+                                : 'bg-prospex-bg border-prospex-border hover:border-prospex-cyan/40')}>
+                          <div className="flex items-start justify-between gap-1.5 mb-1">
+                            <div className="min-w-0 flex-1">
+                              <p className={cn('text-xs font-mono font-bold truncate',
+                                blocked ? 'text-prospex-dim' : 'text-prospex-text')}>
+                                {isSelected && '✓ '}@{a.username}
+                              </p>
+                              {(a.notes || a.display_name) && (
+                                <p className="text-[9px] text-prospex-dim truncate mt-0.5">
+                                  {a.notes || a.display_name}
+                                </p>
+                              )}
+                            </div>
+                            <span className="text-[9px] font-mono text-prospex-dim flex-shrink-0" title={stageBadge}>
+                              {stageBadge.split(' ')[0]}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] font-mono mb-1">
+                            <span className={blocked ? 'text-prospex-dim' : 'text-prospex-muted'}>
+                              {used}/{w.effective_target} sent
+                            </span>
+                            <span className={cn('font-bold', blocked ? 'text-prospex-red/70' : 'text-pink-400')}>
+                              {blocked ? 'blocked' : `${remain} left`}
+                            </span>
+                          </div>
+                          <div className="w-full h-1 bg-prospex-bg rounded-full overflow-hidden">
+                            <div className={cn('h-full transition-all', blocked ? 'bg-prospex-red/40' : barColor)} style={{ width: `${pct}%` }} />
+                          </div>
+                          <div className="flex items-center justify-between text-[9px] text-prospex-dim mt-1">
+                            <span>cap {w.hard_limit}</span>
+                            {blocked && <span className="text-prospex-red/70">
+                              {w.stage === 'new' ? 'warmup not started' : w.stage === 'paused' ? 'paused' : 'at cap'}
+                            </span>}
+                          </div>
+                        </button>
                       );
                     })}
-                  </select>
-                  <button onClick={() => setShowAddAccount(true)} className="btn-ghost text-xs" title="Add another account">
-                    <Plus className="w-3.5 h-3.5" />
+                  </div>
+                  <button onClick={() => setShowAddAccount(true)} className="btn-ghost text-xs w-full justify-center">
+                    <Plus className="w-3.5 h-3.5" /> Add another account
                   </button>
-                </div>
+                </>
               )}
               {/* Live target-vs-actual bar + warmup status for selected account */}
               {selectedAccount && !showAddAccount && (() => {
