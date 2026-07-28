@@ -210,6 +210,10 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // IG DM open mode — 'direct' tries ig.me/m/ first (faster if it works),
   // 'profile' goes straight to profile URL (reliable). Persisted.
   const [igOpenMode, setIgOpenMode] = useState<'direct' | 'profile'>('profile');
+  // Set of account usernames the operator has explicitly excluded for this
+  // session. Defaults to empty (all available accounts included). Not
+  // persisted — it's a per-session choice, not a long-term pref.
+  const [disabledAccounts, setDisabledAccounts] = useState<Set<string>>(new Set());
   // Turbo mode — collapses "open IG" + "log sent" + "advance" into one action.
   // Trusts the operator to actually complete the send inside Instagram; log
   // fires optimistically the moment Open is tapped. Persisted.
@@ -231,6 +235,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     setWaLastSentAt(null);
     setWaGapRemaining(0);
     setSwitchAcknowledged(false);
+    setDisabledAccounts(new Set());
     // Restore preferred send order + DM open mode from localStorage
     if (isIg && typeof window !== 'undefined') {
       const saved = window.localStorage.getItem('prospex_send_order');
@@ -309,7 +314,14 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     });
   }, [accounts, isIg]);
 
+  // accountCapacity = the pool the queue actually draws from. Requires
+  // (a) not unavailable (warmup / status / at-cap gates) AND
+  // (b) not disabled by the operator's session-level selection.
   const accountCapacity = useMemo(
+    () => accountStatus.filter(a => !a.unavailable && !disabledAccounts.has(a.username)),
+    [accountStatus, disabledAccounts],
+  );
+  const availableAccounts = useMemo(
     () => accountStatus.filter(a => !a.unavailable),
     [accountStatus],
   );
@@ -682,20 +694,55 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                 </div>
               )}
 
-              {/* Account capacity breakdown (IG only) */}
-              {isIg && accountCapacity.length > 0 && (
+              {/* Account capacity breakdown (IG only) — every chip is a
+                  toggle. Green ring = included in this session's queue,
+                  faded = excluded. Lets the operator pick a subset of the
+                  fleet (e.g. "just @acme + @laser today, hold the rest"). */}
+              {isIg && availableAccounts.length > 0 && (
                 <div>
-                  <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5">
-                    Sending from · <span className="text-prospex-cyan">{accountCapacity.length} available</span>
+                  <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5 flex items-center justify-between gap-2 flex-wrap">
+                    <span>
+                      Sending from · <span className="text-prospex-cyan">{accountCapacity.length} of {availableAccounts.length} selected</span>
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <button onClick={() => setDisabledAccounts(new Set())}
+                        className="text-[10px] text-prospex-cyan hover:underline normal-case">
+                        Select all
+                      </button>
+                      <span className="text-prospex-dim">·</span>
+                      <button onClick={() => setDisabledAccounts(new Set(availableAccounts.map(a => a.username)))}
+                        className="text-[10px] text-prospex-dim hover:text-prospex-text normal-case">
+                        Clear
+                      </button>
+                    </span>
                   </p>
                   <div className="flex flex-wrap gap-1.5">
-                    {accountCapacity.map(a => (
-                      <span key={a.username} className="text-[10px] font-mono bg-prospex-bg border border-prospex-border rounded px-2 py-0.5">
-                        @{a.username} · <span className={cn('font-bold', channelMeta.color)}>{a.remaining}</span> left
-                        {a.stage === 'warming' && <span className="ml-1 text-amber-400">🔥warming</span>}
-                      </span>
-                    ))}
+                    {availableAccounts.map(a => {
+                      const isDisabled = disabledAccounts.has(a.username);
+                      return (
+                        <button key={a.username}
+                          onClick={() => setDisabledAccounts(prev => {
+                            const next = new Set(prev);
+                            if (next.has(a.username)) next.delete(a.username);
+                            else next.add(a.username);
+                            return next;
+                          })}
+                          title={isDisabled ? 'Click to include in this session' : 'Click to exclude from this session'}
+                          className={cn('text-[10px] font-mono rounded px-2 py-0.5 border transition-colors min-h-[28px]',
+                            isDisabled
+                              ? 'bg-prospex-bg border-prospex-border/50 text-prospex-dim line-through'
+                              : 'bg-prospex-cyan/10 border-prospex-cyan/40 text-prospex-text hover:bg-prospex-cyan/20')}>
+                          @{a.username} · <span className={cn('font-bold', isDisabled ? 'text-prospex-dim' : channelMeta.color)}>{a.remaining}</span> left
+                          {a.stage === 'warming' && !isDisabled && <span className="ml-1 text-amber-400">🔥</span>}
+                        </button>
+                      );
+                    })}
                   </div>
+                  {accountCapacity.length === 0 && (
+                    <p className="text-[10px] text-amber-400 mt-1.5">
+                      ⚠ No accounts selected — click any chip above to include it.
+                    </p>
+                  )}
                 </div>
               )}
 
