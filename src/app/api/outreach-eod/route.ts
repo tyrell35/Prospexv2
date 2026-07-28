@@ -16,6 +16,7 @@ interface LogRow {
   channel: string | null;
   outcome: string | null;
   sender_account: string | null;
+  sent_by: string | null; // operator label — full_name || email, or 'manual'
   stage: string | null;
   created_at: string;
   lead_business: string | null;
@@ -45,6 +46,10 @@ interface Summary {
   by_channel: Record<string, number>;
   by_account: Array<{ account: string; sent: number; used: number; limit: number; target: number; pct: number; stage: string; replies_today: number; positive_today: number; negative_today: number }>;
   by_stage: Record<string, number>;
+  // Per-team-member breakdown — populated from outreach_logs.sent_by.
+  // Anonymous 'manual' logs excluded so the panel stays clean for
+  // multi-user teams; empty array for solo/pre-multi-user setups.
+  by_operator: Array<{ operator: string; sent: number }>;
   top_replies: Array<{ lead_business: string; at: string }>;
   positive_replies: Array<{ lead_business: string; sender_account: string; channel: string; message_sent: string; responded_at: string }>;
   reply_totals: { replies: number; positive: number; negative: number; neutral: number };
@@ -55,7 +60,7 @@ async function buildSummary(sinceISO?: string): Promise<Summary> {
 
   const { data: logsRaw } = await supabaseAdmin
     .from('outreach_logs')
-    .select('channel, outcome, sender_account, stage, created_at, lead_business')
+    .select('channel, outcome, sender_account, sent_by, stage, created_at, lead_business')
     .gte('created_at', from)
     .lte('created_at', to);
   const logs = (logsRaw || []) as LogRow[];
@@ -64,6 +69,7 @@ async function buildSummary(sinceISO?: string): Promise<Summary> {
   const by_channel: Record<string, number> = {};
   const by_stage: Record<string, number> = {};
   const perAccountSent = new Map<string, number>();
+  const perOperatorSent = new Map<string, number>();
   for (const l of logs) {
     if (l.outcome === 'sent') totals.sent++;
     else if (l.outcome === 'draft') totals.drafts++;
@@ -75,6 +81,9 @@ async function buildSummary(sinceISO?: string): Promise<Summary> {
     by_stage[st] = (by_stage[st] || 0) + 1;
     if (l.outcome === 'sent' && l.sender_account) {
       perAccountSent.set(l.sender_account, (perAccountSent.get(l.sender_account) || 0) + 1);
+    }
+    if (l.outcome === 'sent' && l.sent_by && l.sent_by.trim() && l.sent_by !== 'manual') {
+      perOperatorSent.set(l.sent_by, (perOperatorSent.get(l.sent_by) || 0) + 1);
     }
   }
 
@@ -191,12 +200,17 @@ async function buildSummary(sinceISO?: string): Promise<Summary> {
     neutral: attribution.filter(a => a.sentiment === 'neutral').length,
   };
 
+  const by_operator = Array.from(perOperatorSent.entries())
+    .map(([operator, sent]) => ({ operator, sent }))
+    .sort((a, b) => b.sent - a.sent);
+
   return {
     date: from.slice(0, 10),
     totals,
     by_channel,
     by_stage,
     by_account,
+    by_operator,
     top_replies,
     positive_replies,
     reply_totals,
@@ -227,6 +241,17 @@ function formatSlack(s: Summary, note?: string): { text: string; blocks: unknown
       }).join('\n')
     : '_no per-account activity recorded_';
 
+  // Per-operator leaderboard — only rendered when there are attributed
+  // operators. Multi-user setups get the accountability signal; solo
+  // setups don't see a "1 operator: 450" line that adds no info.
+  const operatorBlock = s.by_operator.length > 0
+    ? '*By operator:*\n' + s.by_operator.slice(0, 10).map((op, i) => {
+        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`;
+        const pct = s.totals.sent > 0 ? Math.round((op.sent / s.totals.sent) * 100) : 0;
+        return `${medal} *${op.operator}* — ${op.sent} sends (${pct}%)`;
+      }).join('\n')
+    : null;
+
   // Positive wins with attribution — the close list
   const winsBlock = s.positive_replies.length > 0
     ? '🎯 *Positive replies today:*\n' + s.positive_replies.slice(0, 8).map(r => {
@@ -241,6 +266,7 @@ function formatSlack(s: Summary, note?: string): { text: string; blocks: unknown
   const textParts: string[] = [];
   if (noteLine) textParts.push(noteLine);
   textParts.push(header, totalsLine, replyTotalsLine, `By channel: ${channelLine}`, `*Per account:*\n${accountLines}`);
+  if (operatorBlock) textParts.push(operatorBlock);
   if (winsBlock) textParts.push(winsBlock);
   const text = textParts.join('\n');
 
@@ -252,6 +278,7 @@ function formatSlack(s: Summary, note?: string): { text: string; blocks: unknown
     { type: 'section', text: { type: 'mrkdwn', text: `*By channel:* ${channelLine}` } },
     { type: 'section', text: { type: 'mrkdwn', text: `*Per account:*\n${accountLines}` } },
   );
+  if (operatorBlock) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: operatorBlock } });
   if (winsBlock) blocks.push({ type: 'section', text: { type: 'mrkdwn', text: winsBlock } });
   blocks.push({ type: 'divider' });
   return { text, blocks };

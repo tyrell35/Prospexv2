@@ -23,6 +23,7 @@ interface Summary {
     stage: string; replies_today: number; positive_today: number; negative_today: number;
   }>;
   by_stage: Record<string, number>;
+  by_operator?: Array<{ operator: string; sent: number }>;
   positive_replies: Array<{
     lead_business: string; sender_account: string; channel: string;
     message_sent: string; responded_at: string;
@@ -267,6 +268,37 @@ export default function PostEodPreviewModal({ isOpen, onClose, onPosted }: Props
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Per-operator leaderboard — mirrors what Slack will show.
+                  Only appears when there are attributed operators. */}
+              {summary.by_operator && summary.by_operator.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-mono text-prospex-dim uppercase mb-2 flex items-center gap-2">
+                    👤 By Operator · {summary.by_operator.length}
+                    <span className="text-[9px] normal-case">— team leaderboard shown in Slack</span>
+                  </p>
+                  <div className="space-y-1.5">
+                    {summary.by_operator.map((op, i) => {
+                      const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`;
+                      const pct = summary.totals.sent > 0 ? Math.round((op.sent / summary.totals.sent) * 100) : 0;
+                      return (
+                        <div key={op.operator} className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-prospex-dim w-8 flex-shrink-0">{medal}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-prospex-text font-mono truncate">{op.operator}</span>
+                              <span className="text-prospex-cyan font-mono font-bold flex-shrink-0 ml-2">{op.sent} · {pct}%</span>
+                            </div>
+                            <div className="w-full h-1 bg-prospex-bg rounded-full">
+                              <div className="h-1 bg-prospex-cyan/60 rounded-full" style={{ width: `${pct}%` }} />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
