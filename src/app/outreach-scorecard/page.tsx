@@ -32,6 +32,7 @@ interface Scorecard {
   by_day: Array<{ date: string; sent: number }>;
   by_channel: Array<{ channel: string; sent: number }>;
   by_stage: Array<{ stage: string; sent: number }>;
+  by_operator: Array<{ operator: string; sent: number }>;
   positive_reply_log: Array<{
     lead_id: string; lead_business: string; sender_account: string; channel: string;
     sentiment: 'positive'; sent_at: string; responded_at: string; message_sent: string;
@@ -556,6 +557,36 @@ export default function OutreachScorecardPage() {
                   </div>
                 )}
               </div>
+              {/* Per-operator (multi-user attribution) — only renders when
+                  logs are attributed to a real team member. Anonymous
+                  'manual' logs are excluded from the count server-side. */}
+              {data.by_operator && data.by_operator.length > 0 && (
+                <div>
+                  <h2 className="text-xs font-mono text-prospex-dim uppercase tracking-wider mb-2 flex items-center gap-2">
+                    👤 By Operator <span className="text-[9px] text-prospex-dim normal-case">— who sent what</span>
+                  </h2>
+                  <div className="space-y-1.5">
+                    {data.by_operator.map((o, i) => {
+                      const pct = data.funnel.sent > 0 ? Math.round((o.sent / data.funnel.sent) * 100) : 0;
+                      const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`;
+                      return (
+                        <div key={o.operator} className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-prospex-dim w-8 flex-shrink-0">{medal}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-prospex-text font-mono truncate">{o.operator}</span>
+                              <span className="text-prospex-cyan font-mono font-bold flex-shrink-0 ml-2">{o.sent}</span>
+                            </div>
+                            <div className="w-full h-1 bg-prospex-bg rounded-full">
+                              <div className="h-1 bg-prospex-cyan/60 rounded-full" style={{ width: `${pct}%` }} />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

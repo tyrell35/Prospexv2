@@ -5,6 +5,7 @@ import { X, Check, XCircle, FileEdit, Ban, AlertCircle, Loader2, Plus, MessageCi
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { computeWarmupState } from '@/lib/ig-warmup';
+import { useAuth } from '@/lib/auth-context';
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -59,6 +60,11 @@ const outcomeMeta: Record<Outcome, { label: string; help: string; icon: typeof C
 // ═══════════════════════════════════════════════════════
 
 export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, channel, stage = 'cold_open', messageSent, templateName }: Props) {
+  const { teamMember, user } = useAuth();
+  // Human-readable operator label — full name preferred, then email, then
+  // 'manual' fallback for anonymous / pre-auth flows. Written to
+  // outreach_logs.sent_by so multi-user teams can see who did what.
+  const operatorLabel = teamMember?.full_name || teamMember?.email || user?.email || 'manual';
   const [outcome, setOutcome] = useState<Outcome>('sent');
   const [accounts, setAccounts] = useState<IgAccount[]>([]);
   const [selectedAccount, setSelectedAccount] = useState<string>('');
@@ -177,7 +183,7 @@ export default function SendConfirmModal({ isOpen, onClose, onLogged, lead, chan
           channel,
           stage,
           message_sent: messageSent,
-          sent_by: 'manual',
+          sent_by: operatorLabel,
           sender_account: sender,
           outcome,
           confirmed: true,

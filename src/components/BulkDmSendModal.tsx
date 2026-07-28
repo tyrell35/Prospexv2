@@ -8,6 +8,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { computeWarmupState } from '@/lib/ig-warmup';
+import { useAuth } from '@/lib/auth-context';
 import type { Lead } from '@/lib/types';
 
 // ═══════════════════════════════════════════════════════
@@ -180,6 +181,10 @@ function leadContact(lead: Lead, channel: Channel): string | null {
 
 // ═══════════════════════════════════════════════════════
 export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCompleted }: Props) {
+  const { teamMember, user } = useAuth();
+  // Operator label — used to attribute each send to a specific team member
+  // in outreach_logs.sent_by. Falls back to 'manual' if no auth context.
+  const operatorLabel = teamMember?.full_name || teamMember?.email || user?.email || 'manual';
   const isIg = channel === 'instagram';
   const isWa = channel === 'whatsapp';
   const channelMeta = isIg
@@ -529,7 +534,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
             channel,
             stage: 'cold_open',
             message_sent: current.message,
-            sent_by: 'manual',
+            sent_by: operatorLabel,
             // WA: no per-account counter to bump; log null so it doesn't
             // show up misleadingly as an @ig_account in the scorecard.
             sender_account: isIg ? current.sender_account : null,

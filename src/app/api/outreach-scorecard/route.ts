@@ -46,6 +46,7 @@ interface LogRow {
   channel: string | null;
   outcome: string | null;
   sender_account: string | null;
+  sent_by: string | null; // operator name/email — used for per-operator breakdown
   stage: string | null;
   message_sent: string | null;
   created_at: string;
@@ -83,7 +84,7 @@ export async function GET(request: NextRequest) {
   // ─── Pull logs ────────────────────────────────────────
   let logsQ = supabaseAdmin
     .from('outreach_logs')
-    .select('lead_id, lead_business, channel, outcome, sender_account, stage, message_sent, created_at')
+    .select('lead_id, lead_business, channel, outcome, sender_account, sent_by, stage, message_sent, created_at')
     .lte('created_at', to)
     .limit(50000);
   if (from) logsQ = logsQ.gte('created_at', from);
@@ -113,6 +114,9 @@ export async function GET(request: NextRequest) {
   const perDaySent = new Map<string, number>();
   const perChannelSent = new Map<string, number>();
   const perStageSent = new Map<string, number>();
+  // Per-operator (sent_by) counts — needed for the multi-user Per Operator
+  // section on the scorecard. Ignores 'manual' anonymous logs.
+  const perOperatorSent = new Map<string, number>();
   for (const l of logs) {
     if (l.outcome === 'sent') {
       sent++;
@@ -124,6 +128,8 @@ export async function GET(request: NextRequest) {
       perChannelSent.set(ch, (perChannelSent.get(ch) || 0) + 1);
       const st = l.stage || 'unknown';
       perStageSent.set(st, (perStageSent.get(st) || 0) + 1);
+      const op = l.sent_by && l.sent_by.trim() && l.sent_by !== 'manual' ? l.sent_by : null;
+      if (op) perOperatorSent.set(op, (perOperatorSent.get(op) || 0) + 1);
     } else if (l.outcome === 'draft') drafts++;
     else if (l.outcome === 'blocked') blocked++;
     else if (l.outcome === 'unsent') unsent++;
@@ -198,6 +204,13 @@ export async function GET(request: NextRequest) {
     .sort((a, b) => b.sent - a.sent);
   const by_stage = Array.from(perStageSent.entries())
     .map(([stage, n]) => ({ stage, sent: n }))
+    .sort((a, b) => b.sent - a.sent);
+
+  // ─── Per-operator (multi-user attribution) ───────────
+  // Ranked by sends desc so team leaderboard is obvious. Only entries
+  // with a real sent_by value show up (skips 'manual' anonymous logs).
+  const by_operator = Array.from(perOperatorSent.entries())
+    .map(([operator, n]) => ({ operator, sent: n }))
     .sort((a, b) => b.sent - a.sent);
 
   // ─── Total attempts (any outcome) ─────────────────────
@@ -322,6 +335,7 @@ export async function GET(request: NextRequest) {
     by_day,
     by_channel,
     by_stage,
+    by_operator,
     positive_reply_log,
     message_log,
   });
