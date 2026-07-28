@@ -246,9 +246,15 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
         : 'channel.eq.whatsapp,channel.eq.all';
       const tplP = supabase.from('conversation_templates').select('id, name, category, content, channel')
         .eq('is_active', true).or(channelFilter).order('category');
+      // Load ALL ig_accounts (was filtering to status='active' only, which
+      // silently hid accounts in warming/paused/resting states from the
+      // fleet view — operator would see "12 accounts configured, 2 selectable"
+      // with no way to see why the other 10 were missing).
+      // The accountCapacity memo below still filters to only sendable ones
+      // for the queue; the setup screen now shows the full fleet with reasons.
       const accP = isIg
         ? supabase.from('ig_accounts').select('id, username, display_name, status, daily_sent_today, daily_limit, daily_target, warmup_stage, warmup_started_at, notes')
-            .eq('status', 'active').order('username')
+            .order('username')
         : Promise.resolve({ data: [] });
       const [tpl, acc] = await Promise.all([tplP, accP]);
       setTemplates((tpl.data || []) as DbTemplate[]);
@@ -283,15 +289,34 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // WA: single personal WhatsApp Web — cap at WHATSAPP_SAFE_DAILY_CAP.
   //     We can't read what's been sent today outside Prospex, so the cap
   //     is a per-session limit for this modal opening.
-  const accountCapacity = useMemo(() => {
+  // Every account gets a status verdict so the setup screen can show the
+  // full fleet + explain why each unavailable one isn't in rotation.
+  const accountStatus = useMemo(() => {
     if (!isIg) return [];
     return accounts.map(a => {
       const w = computeWarmupState(a);
       const used = a.daily_sent_today || 0;
       const remaining = Math.max(0, w.effective_target - used);
-      return { username: a.username, remaining, stage: w.stage, target: w.effective_target };
-    }).filter(a => a.stage !== 'new' && a.stage !== 'paused' && a.remaining > 0);
+      let reason: string | null = null;
+      if (a.status && a.status !== 'active') reason = `status: ${a.status}`;
+      else if (w.stage === 'new') reason = 'warmup not started';
+      else if (w.stage === 'paused') reason = 'paused';
+      else if (remaining <= 0) reason = `at cap · ${used}/${w.effective_target} today`;
+      return {
+        username: a.username, remaining, stage: w.stage, target: w.effective_target,
+        used, status: a.status, unavailable: reason !== null, reason,
+      };
+    });
   }, [accounts, isIg]);
+
+  const accountCapacity = useMemo(
+    () => accountStatus.filter(a => !a.unavailable),
+    [accountStatus],
+  );
+  const unavailableAccounts = useMemo(
+    () => accountStatus.filter(a => a.unavailable),
+    [accountStatus],
+  );
   const totalCapacity = isIg
     ? accountCapacity.reduce((s, a) => s + a.remaining, 0)
     : WHATSAPP_SAFE_DAILY_CAP;
@@ -660,7 +685,9 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
               {/* Account capacity breakdown (IG only) */}
               {isIg && accountCapacity.length > 0 && (
                 <div>
-                  <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5">Sending from</p>
+                  <p className="text-[10px] font-mono uppercase text-prospex-dim mb-1.5">
+                    Sending from · <span className="text-prospex-cyan">{accountCapacity.length} available</span>
+                  </p>
                   <div className="flex flex-wrap gap-1.5">
                     {accountCapacity.map(a => (
                       <span key={a.username} className="text-[10px] font-mono bg-prospex-bg border border-prospex-border rounded px-2 py-0.5">
@@ -669,6 +696,41 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                       </span>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Unavailable accounts — the fix for "I have 12 accounts but
+                  only 2 selectable". Shows the full unavailable set with
+                  the reason each is out, plus a link to the IG Accounts
+                  page where the operator can start warmup / resume / etc. */}
+              {isIg && unavailableAccounts.length > 0 && (
+                <div className="p-2.5 rounded border border-amber-500/30 bg-amber-500/5">
+                  <p className="text-[10px] font-mono uppercase text-amber-400 mb-1.5 flex items-center justify-between gap-2">
+                    <span>⚠ {unavailableAccounts.length} account{unavailableAccounts.length === 1 ? '' : 's'} not sending today</span>
+                    <a href="/dm-campaigns" target="_blank" rel="noopener noreferrer"
+                       className="text-[10px] text-prospex-cyan underline hover:text-prospex-text normal-case">
+                      Fix in IG Accounts →
+                    </a>
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {unavailableAccounts.map(a => {
+                      const badge = a.reason?.includes('not started') ? '🆕'
+                        : a.reason === 'paused' ? '⏸'
+                        : a.reason?.includes('at cap') ? '🔴'
+                        : a.reason?.startsWith('status:') ? '⏹'
+                        : '⚠';
+                      return (
+                        <span key={a.username}
+                              className="text-[10px] font-mono bg-prospex-bg border border-amber-500/20 rounded px-2 py-0.5 text-prospex-muted"
+                              title={a.reason || 'unavailable'}>
+                          {badge} @{a.username} <span className="text-prospex-dim">· {a.reason}</span>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[9px] text-prospex-dim mt-2 leading-tight">
+                    🆕 = warmup not started (click Start on the row) · ⏸ = paused · 🔴 = hit today&apos;s target · ⏹ = status not active
+                  </p>
                 </div>
               )}
 
