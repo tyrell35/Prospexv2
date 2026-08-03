@@ -409,6 +409,37 @@ export default function LeadsPage() {
       {/* MOBILE — card list. Renders the same data as the desktop table
           but stacked, with a checkbox + row of action chips per card. */}
       <div className="md:hidden space-y-2 pb-24">
+        {/* Mobile Select-all strip — sticky at the top of the card list.
+            Desktop has the header-row checkbox for select-all; mobile
+            needed its own tap-friendly control since the cards have no
+            shared header. Only renders when there are leads. */}
+        {!loading && leads.length > 0 && (
+          <div className="card p-2 flex items-center justify-between gap-2 sticky top-14 z-20 bg-prospex-surface">
+            <button
+              onClick={toggleSelectAll}
+              className="flex items-center gap-2 min-h-[36px] px-2 text-xs font-mono text-prospex-cyan hover:text-prospex-text">
+              <input
+                type="checkbox"
+                checked={selectedIds.size > 0 && selectedIds.size === leads.length}
+                ref={el => { if (el) el.indeterminate = selectedIds.size > 0 && selectedIds.size < leads.length; }}
+                onChange={toggleSelectAll}
+                className="w-5 h-5 rounded border-prospex-cyan/40 bg-prospex-bg accent-prospex-cyan pointer-events-none"
+              />
+              {selectedIds.size === 0
+                ? `Select all ${leads.length} on this page`
+                : selectedIds.size === leads.length
+                  ? `All ${leads.length} selected · tap to clear`
+                  : `${selectedIds.size} of ${leads.length} selected`}
+            </button>
+            {selectedIds.size > 0 && selectedIds.size < leads.length && (
+              <button
+                onClick={toggleSelectAll}
+                className="text-[11px] font-mono text-prospex-dim hover:text-prospex-text min-h-[36px] px-2">
+                Select all
+              </button>
+            )}
+          </div>
+        )}
         {loading ? (
           <div className="card p-12 text-center">
             <div className="w-6 h-6 border-2 border-prospex-cyan/30 border-t-prospex-cyan rounded-full animate-spin mx-auto" />
