@@ -219,10 +219,22 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // session. Defaults to empty (all available accounts included). Not
   // persisted — it's a per-session choice, not a long-term pref.
   const [disabledAccounts, setDisabledAccounts] = useState<Set<string>>(new Set());
+  // Recent-leads popover — shows the last N leads sent from a specific
+  // account, so operator can avoid double-messaging across sessions.
+  interface RecentLead { lead_business: string | null; created_at: string; outcome: string | null; lead_id: string | null }
+  const [recentForAccount, setRecentForAccount] = useState<string | null>(null);
+  const [recentLeads, setRecentLeads] = useState<RecentLead[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
   // Turbo mode — collapses "open IG" + "log sent" + "advance" into one action.
   // Trusts the operator to actually complete the send inside Instagram; log
   // fires optimistically the moment Open is tapped. Persisted.
   const [turboMode, setTurboMode] = useState(false);
+  // Wall-clock start of the run phase — used to compute avg time per lead
+  // in the session summary.
+  const [sessionStartTs, setSessionStartTs] = useState<number | null>(null);
+  // Mid-session swap: reassign the current lead's sender_account without
+  // touching the rest of the queue. Toggled by tapping "from @xxx" label.
+  const [showSwapPicker, setShowSwapPicker] = useState(false);
   // IG-only: has the operator confirmed they've switched to the current cluster's account?
   // Reset whenever the cluster changes. Blocks Open-in-IG until acknowledged so nobody
   // accidentally sends 30 messages from the wrong account.
@@ -435,6 +447,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     setQueue(rows);
     setCurrentIndex(0);
     setSwitchAcknowledged(false); // reset — first cluster needs to be acknowledged
+    setSessionStartTs(Date.now());
     setPhase('run');
   };
 
@@ -550,6 +563,46 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   const persistTurboMode = (v: boolean) => {
     setTurboMode(v);
     if (typeof window !== 'undefined') window.localStorage.setItem('prospex_turbo_mode', v ? '1' : '0');
+  };
+
+  // Swap the current lead's sender_account mid-session. Updates only the
+  // current lead's queue row — later leads keep their original assignment,
+  // so a mid-cluster swap doesn't shred the grouped-mode structure.
+  // If swapping into a new account, reset the switch-acknowledged gate
+  // so the operator visibly confirms the account change before sending.
+  const swapCurrentLeadAccount = (newUsername: string) => {
+    if (!current || newUsername === current.sender_account) {
+      setShowSwapPicker(false);
+      return;
+    }
+    const newNotes = accounts.find(a => a.username === newUsername)?.notes || null;
+    setQueue(prev => prev.map((r, i) => i === currentIndex
+      ? { ...r, sender_account: newUsername, sender_notes: newNotes }
+      : r));
+    if (sendOrder === 'grouped') setSwitchAcknowledged(false);
+    setShowSwapPicker(false);
+  };
+
+  // Auto-close swap picker when advancing to a different lead.
+  useEffect(() => { setShowSwapPicker(false); }, [currentIndex]);
+
+  // Open the recent-leads popover for a specific account. Fetches last 20
+  // sent-outreach logs where sender_account=<username> so operator can
+  // eyeball who's already been contacted from that account today/recently.
+  const openRecentForAccount = async (username: string) => {
+    setRecentForAccount(username);
+    setRecentLeads([]);
+    setRecentLoading(true);
+    try {
+      const { data } = await supabase
+        .from('outreach_logs')
+        .select('lead_business, created_at, outcome, lead_id')
+        .eq('sender_account', username)
+        .eq('outcome', 'sent')
+        .order('created_at', { ascending: false })
+        .limit(20);
+      setRecentLeads((data || []) as RecentLead[]);
+    } finally { setRecentLoading(false); }
   };
 
   // TURBO: one action = open IG + copy message + log sent + advance.
@@ -785,6 +838,23 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                           <div className="flex items-center justify-between text-[9px] text-prospex-dim mt-1">
                             <span>hard cap {a.hard_limit}</span>
                             <span>{isDisabled ? '✕ excluded' : '✓ in queue'}</span>
+                          </div>
+                          {/* Card actions — hoist above the button's click
+                              handler with stopPropagation so tapping them
+                              doesn't also toggle include/exclude. */}
+                          <div className="flex items-center gap-2 mt-1.5 pt-1.5 border-t border-prospex-border/30">
+                            <a href={`https://www.instagram.com/${a.username}/`} target="_blank" rel="noopener noreferrer"
+                              onClick={e => e.stopPropagation()}
+                              className="text-[9px] font-mono text-prospex-dim hover:text-pink-400 flex items-center gap-1 min-h-[28px]"
+                              title={`Open @${a.username} on Instagram in a new tab`}>
+                              <ExternalLink className="w-2.5 h-2.5" /> Open profile
+                            </a>
+                            <span className="text-prospex-dim">·</span>
+                            <button onClick={e => { e.stopPropagation(); openRecentForAccount(a.username); }}
+                              className="text-[9px] font-mono text-prospex-dim hover:text-prospex-cyan flex items-center gap-1 min-h-[28px]"
+                              title={`Show recent sends from @${a.username}`}>
+                              📋 Recent sent
+                            </button>
                           </div>
                         </button>
                       );
@@ -1077,9 +1147,30 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                     </div>
                   </div>
                   {isIg && (
-                    <div className="flex-shrink-0 text-right">
-                      <span className="text-[9px] font-mono text-prospex-dim">from</span>
-                      <p className={cn('text-[11px] font-mono', channelMeta.color)}>@{current.sender_account}</p>
+                    <div className="flex-shrink-0 text-right relative">
+                      <button onClick={() => setShowSwapPicker(v => !v)}
+                        className="text-right hover:bg-prospex-bg rounded px-1.5 py-1 -mx-1 -my-1 transition-colors"
+                        title="Tap to swap this lead's sender account">
+                        <span className="text-[9px] font-mono text-prospex-dim block">from ▾</span>
+                        <p className={cn('text-[11px] font-mono', channelMeta.color)}>@{current.sender_account}</p>
+                      </button>
+                      {/* Mid-session swap picker — only shows accounts that
+                          are (a) in this session's queue eligibility AND
+                          (b) not the current lead's already-assigned one. */}
+                      {showSwapPicker && (
+                        <div className="absolute right-0 top-full mt-1 z-20 min-w-[220px] card bg-prospex-surface border border-pink-500/40 shadow-xl p-1.5 text-left space-y-0.5 max-h-64 overflow-y-auto">
+                          <p className="text-[9px] font-mono text-prospex-dim uppercase px-2 py-1">Swap to another account</p>
+                          {accountCapacity.filter(a => a.username !== current.sender_account).length === 0 ? (
+                            <p className="text-[10px] text-prospex-dim italic px-2 py-2">No other selected accounts have capacity right now.</p>
+                          ) : accountCapacity.filter(a => a.username !== current.sender_account).map(a => (
+                            <button key={a.username} onClick={() => swapCurrentLeadAccount(a.username)}
+                              className="w-full text-left px-2 py-1.5 rounded hover:bg-pink-500/10 flex items-center justify-between gap-2 min-h-[32px]">
+                              <span className="text-[11px] font-mono text-prospex-text truncate">@{a.username}</span>
+                              <span className="text-[9px] font-mono text-prospex-dim flex-shrink-0">{a.remaining} left</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1182,7 +1273,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
               )}
             </>
           ) : phase === 'done' ? (
-            <div className="py-8 text-center space-y-3">
+            <div className="py-6 text-center space-y-4">
               <Trophy className="w-10 h-10 text-prospex-green mx-auto" />
               <p className="text-sm font-mono text-prospex-text">Session complete</p>
               {(() => {
@@ -1192,24 +1283,77 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   else if (r.outcome === 'blocked') s.blocked++;
                   return s;
                 }, { sent: 0, skipped: 0, blocked: 0 });
+                const elapsedMs = sessionStartTs ? Date.now() - sessionStartTs : 0;
+                const elapsedSec = Math.round(elapsedMs / 1000);
+                const elapsedMin = Math.floor(elapsedSec / 60);
+                const remSec = elapsedSec % 60;
+                const elapsedLabel = elapsedMin > 0 ? `${elapsedMin}m ${remSec}s` : `${remSec}s`;
+                const avgSecPerLead = stats.sent > 0 ? Math.round(elapsedSec / stats.sent) : 0;
+                // Per-account tally for IG sessions — WhatsApp has a single sender.
+                const perAccount = new Map<string, { sent: number; skipped: number; blocked: number }>();
+                if (isIg) {
+                  for (const r of queue) {
+                    const acc = r.sender_account || '(unknown)';
+                    const entry = perAccount.get(acc) || { sent: 0, skipped: 0, blocked: 0 };
+                    if (r.outcome === 'sent') entry.sent++;
+                    else if (r.outcome === 'skipped') entry.skipped++;
+                    else if (r.outcome === 'blocked') entry.blocked++;
+                    perAccount.set(acc, entry);
+                  }
+                }
                 return (
-                  <div className="grid grid-cols-3 gap-2 max-w-sm mx-auto">
-                    <div className="p-2.5 bg-prospex-bg rounded border border-prospex-green/40">
-                      <p className="text-[9px] font-mono text-prospex-dim uppercase">Sent</p>
-                      <p className="text-2xl font-mono font-bold text-prospex-green">{stats.sent}</p>
+                  <>
+                    {/* Headline tiles */}
+                    <div className="grid grid-cols-3 gap-2 max-w-sm mx-auto">
+                      <div className="p-2.5 bg-prospex-bg rounded border border-prospex-green/40">
+                        <p className="text-[9px] font-mono text-prospex-dim uppercase">Sent</p>
+                        <p className="text-2xl font-mono font-bold text-prospex-green">{stats.sent}</p>
+                      </div>
+                      <div className="p-2.5 bg-prospex-bg rounded border border-prospex-border">
+                        <p className="text-[9px] font-mono text-prospex-dim uppercase">Skipped</p>
+                        <p className="text-2xl font-mono font-bold text-prospex-muted">{stats.skipped}</p>
+                      </div>
+                      <div className="p-2.5 bg-prospex-bg rounded border border-prospex-red/30">
+                        <p className="text-[9px] font-mono text-prospex-dim uppercase">Blocked</p>
+                        <p className="text-2xl font-mono font-bold text-prospex-red">{stats.blocked}</p>
+                      </div>
                     </div>
-                    <div className="p-2.5 bg-prospex-bg rounded border border-prospex-border">
-                      <p className="text-[9px] font-mono text-prospex-dim uppercase">Skipped</p>
-                      <p className="text-2xl font-mono font-bold text-prospex-muted">{stats.skipped}</p>
-                    </div>
-                    <div className="p-2.5 bg-prospex-bg rounded border border-prospex-red/30">
-                      <p className="text-[9px] font-mono text-prospex-dim uppercase">Blocked</p>
-                      <p className="text-2xl font-mono font-bold text-prospex-red">{stats.blocked}</p>
-                    </div>
-                  </div>
+
+                    {/* Timing */}
+                    {stats.sent > 0 && sessionStartTs && (
+                      <div className="max-w-sm mx-auto text-[11px] font-mono text-prospex-dim flex items-center justify-center gap-3 flex-wrap">
+                        <span>⏱ {elapsedLabel} elapsed</span>
+                        <span className="text-prospex-border">·</span>
+                        <span>{avgSecPerLead}s per sent lead</span>
+                      </div>
+                    )}
+
+                    {/* Per-account breakdown (IG only) */}
+                    {isIg && perAccount.size > 0 && (
+                      <div className="max-w-md mx-auto text-left">
+                        <p className="text-[10px] font-mono text-prospex-dim uppercase mb-2 text-center">
+                          👤 By account
+                        </p>
+                        <div className="space-y-1 max-h-48 overflow-y-auto">
+                          {Array.from(perAccount.entries())
+                            .sort((a, b) => b[1].sent - a[1].sent)
+                            .map(([acc, s]) => (
+                              <div key={acc} className="flex items-center justify-between gap-2 text-[11px] font-mono bg-prospex-bg rounded px-2 py-1">
+                                <span className="text-prospex-text truncate">@{acc}</span>
+                                <span className="text-prospex-dim flex-shrink-0">
+                                  <span className="text-prospex-green">{s.sent} sent</span>
+                                  {s.skipped > 0 && <span className="text-prospex-muted"> · {s.skipped} skip</span>}
+                                  {s.blocked > 0 && <span className="text-prospex-red/80"> · {s.blocked} block</span>}
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
                 );
               })()}
-              <p className="text-[10px] text-prospex-dim mt-2">Your account daily counts + outreach log have been updated.</p>
+              <p className="text-[10px] text-prospex-dim">Account daily counts + outreach log updated.</p>
             </div>
           ) : null}
         </div>
@@ -1237,6 +1381,57 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
           </div>
         </div>
       </div>
+
+      {/* Recent-sent popover — appears on top of the main modal when
+          operator taps "Recent sent" on any account card. Shows the
+          last 20 leads sent from that account so operator can spot
+          duplicates before re-messaging the same clinic. */}
+      {recentForAccount && (
+        <div className="fixed inset-0 bg-black/60 z-[210] flex items-center justify-center p-4" onClick={() => setRecentForAccount(null)}>
+          <div className="bg-prospex-surface border border-prospex-cyan/40 rounded-lg shadow-2xl max-w-md w-full max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="p-3 border-b border-prospex-border flex items-center justify-between flex-shrink-0">
+              <p className="text-xs font-mono font-bold text-prospex-text">
+                📋 Recent sent from <span className="text-prospex-cyan">@{recentForAccount}</span>
+              </p>
+              <button onClick={() => setRecentForAccount(null)}
+                className="text-prospex-dim hover:text-prospex-text p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {recentLoading ? (
+                <div className="py-8 text-center">
+                  <Loader2 className="w-4 h-4 text-prospex-cyan animate-spin mx-auto" />
+                </div>
+              ) : recentLeads.length === 0 ? (
+                <p className="text-[11px] text-prospex-dim italic text-center py-8">
+                  No recorded sends from this account yet.
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {recentLeads.map((r, i) => {
+                    const ageMs = Date.now() - new Date(r.created_at).getTime();
+                    const ageHrs = Math.floor(ageMs / 3_600_000);
+                    const ageDays = Math.floor(ageHrs / 24);
+                    const ageLabel = ageDays > 0 ? `${ageDays}d ago` : ageHrs > 0 ? `${ageHrs}h ago` : 'just now';
+                    return (
+                      <div key={`${r.lead_id}-${i}`} className="flex items-center justify-between gap-2 text-[11px] font-mono bg-prospex-bg rounded px-2 py-1.5">
+                        <span className="text-prospex-text truncate flex-1">
+                          {r.lead_business || '(unknown)'}
+                        </span>
+                        <span className="text-prospex-dim flex-shrink-0">{ageLabel}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="p-2 border-t border-prospex-border text-[10px] text-prospex-dim text-center">
+              Last {recentLeads.length} sent · newest first · use this to avoid double-messaging
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
