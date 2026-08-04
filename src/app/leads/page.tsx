@@ -6,6 +6,7 @@ import { Database, Search, Shield, Upload, Download, Trash2, ChevronUp, ChevronD
 import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getSourceConfig, getPriorityConfig, formatDate } from '@/lib/utils';
 import type { Lead, TableSort, TableFilter } from '@/lib/types';
+import { getLeadHealth, HEALTH_CONFIG, HEALTH_ORDER, type LeadHealth } from '@/lib/lead-health';
 import QuickMessage from '@/components/QuickMessage';
 import OutreachBlaster from '@/components/OutreachBlaster';
 import BulkDmSendModal from '@/components/BulkDmSendModal';
@@ -29,6 +30,16 @@ function PriorityBadge({ priority }: { priority: 'hot' | 'warm' | 'cold' | null 
   if (!priority) return null;
   const config = getPriorityConfig(priority);
   return <span className={cn('badge', config.bg, config.text, config.border)}>{config.emoji} {config.label}</span>;
+}
+
+function HealthBadge({ health }: { health: LeadHealth }) {
+  const cfg = HEALTH_CONFIG[health];
+  return (
+    <span className={cn('text-[10px] font-mono px-1.5 py-0.5 rounded border inline-flex items-center gap-1', cfg.bgClass, cfg.textClass, cfg.borderClass)}
+      title={cfg.label}>
+      <span>{cfg.emoji}</span> {cfg.short}
+    </span>
+  );
 }
 
 const priorityFilters = [
@@ -61,6 +72,9 @@ export default function LeadsPage() {
   const [countryFilter, setCountryFilter] = useState('');
   const [cityFilter, setCityFilter] = useState('');
   const [countyFilter, setCountyFilter] = useState('');
+  // Lead health filter — 'all' = no filter, otherwise show only leads in
+  // that health bucket. See src/lib/lead-health.ts for bucket definitions.
+  const [healthFilter, setHealthFilter] = useState<'all' | 'ready' | 'contacted' | 'replied' | 'booked' | 'not_interested' | 'dead' | 'no_channels'>('all');
   const [showFilters, setShowFilters] = useState(false);
   const [msgOpen, setMsgOpen] = useState(false);
   const [msgChannel, setMsgChannel] = useState<'whatsapp' | 'instagram'>('whatsapp');
@@ -83,6 +97,11 @@ export default function LeadsPage() {
   const [deviceTierFilter, setDeviceTierFilter] = useState<'A' | 'B' | ''>('');
   const [deviceMatchMode, setDeviceMatchMode] = useState<'any' | 'all'>('any');
   const [deviceIdMask, setDeviceIdMask] = useState<Set<string> | null>(null); // ids that pass current filter
+  // Fetch-failed IDs map — populated for the current visible page. Used to
+  // (a) render the ❌ Dead badge on cards, and (b) drive the 'dead' health
+  // filter which requires a pre-fetched ID list (no direct FK join in RLS).
+  const [pageFetchFailedIds, setPageFetchFailedIds] = useState<Set<string>>(new Set());
+  const [deadIdMask, setDeadIdMask] = useState<Set<string> | null>(null);
 
   // Fetch unique filter values
   useEffect(() => {
@@ -113,6 +132,23 @@ export default function LeadsPage() {
   // Resolve device filter → set of lead_ids that match. Runs whenever the
   // device filter changes; leaves deviceIdMask=null if nothing selected so
   // fetchLeads knows to skip the extra WHERE clause.
+  // Health='dead' → pre-fetch every lead_id where hunt_enrichment.fetch_ok
+  // is false. Used as an ID mask on fetchLeads. Same pattern as deviceIdMask.
+  useEffect(() => {
+    if (healthFilter !== 'dead') { setDeadIdMask(null); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('hunt_enrichment')
+        .select('lead_id')
+        .eq('fetch_ok', false)
+        .limit(20000);
+      if (cancelled) return;
+      setDeadIdMask(new Set((data || []).map(r => (r as { lead_id: string }).lead_id)));
+    })();
+    return () => { cancelled = true; };
+  }, [healthFilter]);
+
   useEffect(() => {
     const hasFilter = deviceFilter.length > 0 || !!deviceTierFilter;
     if (!hasFilter) { setDeviceIdMask(null); return; }
@@ -154,13 +190,53 @@ export default function LeadsPage() {
         }
         query = query.in('id', ids);
       }
+      // Lead health filter — most buckets map to a single DB clause; 'dead'
+      // uses the pre-resolved deadIdMask; 'no_channels' needs an all-NULL
+      // combo (Supabase doesn't support AND-of-IS-NULL in .or(), so we use
+      // separate .is() calls chained).
+      if (healthFilter === 'booked') query = query.eq('outreach_status', 'booked');
+      else if (healthFilter === 'not_interested') query = query.eq('outreach_status', 'not_interested');
+      else if (healthFilter === 'replied') query = query.not('responded_at', 'is', null);
+      else if (healthFilter === 'contacted') query = query.eq('outreach_status', 'contacted').is('responded_at', null);
+      else if (healthFilter === 'ready') {
+        // Ready = has at least one channel AND not already contacted / responded / booked / not_interested
+        query = query
+          .or('instagram_handle.not.is.null,instagram_url.not.is.null,phone.not.is.null,email.not.is.null')
+          .not('outreach_status', 'in', '("contacted","responded","booked","not_interested")')
+          .is('responded_at', null);
+      } else if (healthFilter === 'no_channels') {
+        query = query.is('instagram_handle', null).is('instagram_url', null).is('phone', null).is('email', null);
+      } else if (healthFilter === 'dead') {
+        if (!deadIdMask) { setLoading(true); return; } // waiting on mask fetch
+        const ids = Array.from(deadIdMask);
+        if (ids.length === 0) { setLeads([]); setTotalCount(0); setLoading(false); return; }
+        query = query.in('id', ids);
+      }
       const { data, count, error } = await query;
       if (error) throw error;
-      setLeads(data || []);
+      const rows = (data || []) as Lead[];
+      setLeads(rows);
       setTotalCount(count || 0);
+      // Fetch enrichment.fetch_ok for the currently loaded rows — used to
+      // render the ❌ Dead badge accurately. Best-effort; missing data
+      // just means no badge for that lead.
+      if (rows.length > 0) {
+        const ids = rows.map(r => r.id);
+        const { data: enr } = await supabase
+          .from('hunt_enrichment')
+          .select('lead_id, fetch_ok')
+          .in('lead_id', ids);
+        const failed = new Set<string>();
+        for (const e of (enr || []) as Array<{ lead_id: string; fetch_ok: boolean | null }>) {
+          if (e.fetch_ok === false) failed.add(e.lead_id);
+        }
+        setPageFetchFailedIds(failed);
+      } else {
+        setPageFetchFailedIds(new Set());
+      }
     } catch (error) { console.error('Failed to fetch leads:', error); }
     finally { setLoading(false); }
-  }, [sort, filter, page, nicheFilter, countryFilter, cityFilter, countyFilter, deviceIdMask]);
+  }, [sort, filter, page, nicheFilter, countryFilter, cityFilter, countyFilter, deviceIdMask, healthFilter, deadIdMask]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
 
@@ -193,10 +269,11 @@ export default function LeadsPage() {
     setCountyFilter('');
     setDeviceFilter([]);
     setDeviceTierFilter('');
+    setHealthFilter('all');
     setPage(0);
   };
 
-  const activeFilterCount = [filter.source, filter.priority, nicheFilter, countryFilter, cityFilter, countyFilter, deviceTierFilter, deviceFilter.length > 0 ? 'devices' : null].filter(Boolean).length;
+  const activeFilterCount = [filter.source, filter.priority, nicheFilter, countryFilter, cityFilter, countyFilter, deviceTierFilter, deviceFilter.length > 0 ? 'devices' : null, healthFilter !== 'all' ? 'health' : null].filter(Boolean).length;
 
   const toggleDeviceInFilter = (name: string) => {
     setDeviceFilter(prev => prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name]);
@@ -244,6 +321,34 @@ export default function LeadsPage() {
             {activeFilterCount > 0 && <span className="text-amber-400"> · {activeFilterCount} filter{activeFilterCount > 1 ? 's' : ''} active</span>}
           </p>
         </div>
+      </div>
+
+      {/* Lead Health Filter — the primary "what state is this lead in"
+          triage bar. Sits above priority tabs so it's the first cut the
+          operator makes. Emoji + count so it scans in one glance. */}
+      <div className="card p-2 flex items-center gap-1.5 flex-wrap overflow-x-auto">
+        <span className="text-[10px] font-mono text-prospex-dim uppercase pl-1 flex-shrink-0">Status</span>
+        <button onClick={() => { setHealthFilter('all'); setPage(0); }}
+          className={cn('text-xs font-mono px-2.5 py-1 rounded border min-h-[32px] whitespace-nowrap',
+            healthFilter === 'all'
+              ? 'bg-prospex-cyan/20 text-prospex-cyan border-prospex-cyan/40'
+              : 'bg-prospex-bg text-prospex-dim border-prospex-border hover:text-prospex-text')}>
+          All
+        </button>
+        {HEALTH_ORDER.map(h => {
+          const cfg = HEALTH_CONFIG[h];
+          const isActive = healthFilter === h;
+          return (
+            <button key={h}
+              onClick={() => { setHealthFilter(h); setPage(0); }}
+              className={cn('text-xs font-mono px-2.5 py-1 rounded border min-h-[32px] whitespace-nowrap flex items-center gap-1',
+                isActive
+                  ? `${cfg.bgClass} ${cfg.textClass} ${cfg.borderClass}`
+                  : 'bg-prospex-bg text-prospex-dim border-prospex-border hover:text-prospex-text')}>
+              <span>{cfg.emoji}</span> {cfg.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Priority Filter Tabs */}
@@ -484,8 +589,9 @@ export default function LeadsPage() {
                     <span>{lead.city || '—'}{lead.county ? `, ${lead.county}` : ''}</span>
                     {lead.niche && <span>· {lead.niche}</span>}
                   </div>
-                  {/* Score + priority + source */}
+                  {/* Score + priority + source + health */}
                   <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                    <HealthBadge health={getLeadHealth(lead, pageFetchFailedIds.has(lead.id))} />
                     {lead.lead_priority && <PriorityBadge priority={lead.lead_priority} />}
                     {lead.lead_score !== null && <ScoreBadge score={lead.lead_score} />}
                     <SourceBadge source={lead.source} />
@@ -558,7 +664,10 @@ export default function LeadsPage() {
                 <tr key={lead.id} className="table-row">
                   <td className="px-3 py-3"><input type="checkbox" checked={selectedIds.has(lead.id)} onChange={() => toggleSelect(lead.id)} className="rounded border-prospex-border bg-prospex-bg" /></td>
                   <td className="px-3 py-3">
-                    <Link href={`/leads/${lead.id}`} className="text-sm font-medium text-prospex-text hover:text-prospex-cyan transition-colors">{lead.business_name}</Link>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Link href={`/leads/${lead.id}`} className="text-sm font-medium text-prospex-text hover:text-prospex-cyan transition-colors">{lead.business_name}</Link>
+                      <HealthBadge health={getLeadHealth(lead, pageFetchFailedIds.has(lead.id))} />
+                    </div>
                     <p className="text-xs text-prospex-dim mt-0.5 truncate max-w-[200px]">{lead.phone || lead.email || 'No contact info'}</p>
                   </td>
                   <td className="px-3 py-3">
