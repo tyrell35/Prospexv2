@@ -225,6 +225,12 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   const [recentForAccount, setRecentForAccount] = useState<string | null>(null);
   const [recentLeads, setRecentLeads] = useState<RecentLead[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
+  // Intelligent outreach — lead_ids in this batch that have already had a
+  // 'sent' outreach_log from ANY account. Populated after leads load.
+  // Used to (a) split queue into fresh + follow-up, (b) route templates.
+  const [alreadyMessagedIds, setAlreadyMessagedIds] = useState<Set<string>>(new Set());
+  const [includeAlreadyMessaged, setIncludeAlreadyMessaged] = useState(false);
+  const [followUpTemplateId, setFollowUpTemplateId] = useState<string>('');
   // Turbo mode — collapses "open IG" + "log sent" + "advance" into one action.
   // Trusts the operator to actually complete the send inside Instagram; log
   // fires optimistically the moment Open is tapped. Persisted.
@@ -253,6 +259,9 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     setWaGapRemaining(0);
     setSwitchAcknowledged(false);
     setDisabledAccounts(new Set());
+    setAlreadyMessagedIds(new Set());
+    setIncludeAlreadyMessaged(false);
+    setFollowUpTemplateId('');
     // Restore preferred send order + DM open mode from localStorage
     if (isIg && typeof window !== 'undefined') {
       const saved = window.localStorage.getItem('prospex_send_order');
@@ -312,6 +321,46 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   );
   const skippedNoHandle = leads.length - eligibleLeads.length;
 
+  // ─── Prior-send lookup ───────────────────────────
+  // For every eligible lead, check if it's ever had a 'sent' outreach_log.
+  // If yes, it's "already messaged" — auto-excluded from the fresh-cold
+  // queue unless the operator opts in to follow-up mode. Runs once per
+  // modal open (or when the lead set changes).
+  useEffect(() => {
+    if (!isOpen || eligibleLeads.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const ids = eligibleLeads.map(l => l.id);
+      // Chunk to avoid a monster IN() clause on huge selections.
+      const CHUNK = 500;
+      const messaged = new Set<string>();
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const chunk = ids.slice(i, i + CHUNK);
+        const { data } = await supabase
+          .from('outreach_logs')
+          .select('lead_id')
+          .in('lead_id', chunk)
+          .eq('outcome', 'sent')
+          .limit(chunk.length * 5);
+        for (const r of (data || []) as Array<{ lead_id: string }>) {
+          messaged.add(r.lead_id);
+        }
+      }
+      if (!cancelled) setAlreadyMessagedIds(messaged);
+    })();
+    return () => { cancelled = true; };
+  }, [isOpen, eligibleLeads]);
+
+  // Split eligibleLeads → freshLeads (never sent) + followUpLeads (prior send)
+  const freshLeads = useMemo(
+    () => eligibleLeads.filter(l => !alreadyMessagedIds.has(l.id)),
+    [eligibleLeads, alreadyMessagedIds]
+  );
+  const followUpLeads = useMemo(
+    () => eligibleLeads.filter(l => alreadyMessagedIds.has(l.id)),
+    [eligibleLeads, alreadyMessagedIds]
+  );
+
   // ─── Compute effective remaining capacity ──────────
   // IG: sum of remaining KPI target across active warm accounts (respects
   //     warmup ladder — 5/10/20/30 per account depending on days in ramp).
@@ -362,10 +411,10 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // ─── Build the queue: round-robin across accounts, respecting caps ─
   const startBulkSend = () => {
     setError(null);
-    const template = selectedTemplateId === 'custom'
+    const primaryTemplate = selectedTemplateId === 'custom'
       ? { content: customTemplate }
       : templates.find(t => t.id === selectedTemplateId);
-    if (!template || !template.content.trim()) {
+    if (!primaryTemplate || !primaryTemplate.content.trim()) {
       setError('Pick a template first, or write a custom message.');
       return;
     }
@@ -373,41 +422,53 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
       setError('No warm accounts have capacity left today. Start a warmup or wait for daily reset.');
       return;
     }
-    if (eligibleLeads.length === 0) {
-      setError(isIg ? 'None of the selected leads have an Instagram handle.' : 'None of the selected leads have a valid phone number.');
+    // Fresh cold-open leads use the primary template. If the operator opted
+    // in to also messaging already-contacted leads (follow-up path), those
+    // use followUpTemplate. If no follow-up template is picked, they're
+    // silently skipped rather than sent the cold-open template.
+    const followUpTemplate = includeAlreadyMessaged && followUpTemplateId
+      ? templates.find(t => t.id === followUpTemplateId)
+      : null;
+    // Build the ORDERED targets list — fresh first, follow-ups after.
+    // Each entry carries the template it should use so downstream code can
+    // route templates correctly.
+    const targets: Array<{ lead: Lead; templateContent: string }> = [];
+    for (const l of freshLeads) targets.push({ lead: l, templateContent: primaryTemplate.content });
+    if (followUpTemplate?.content && includeAlreadyMessaged) {
+      for (const l of followUpLeads) targets.push({ lead: l, templateContent: followUpTemplate.content });
+    }
+
+    if (targets.length === 0) {
+      setError(freshLeads.length === 0 && followUpLeads.length > 0
+        ? 'All selected leads have already been messaged. Toggle on the follow-up path + pick a follow-up template to include them.'
+        : (isIg ? 'None of the selected leads have an Instagram handle.' : 'None of the selected leads have a valid phone number.'));
       return;
     }
 
     const rows: QueueRow[] = [];
 
     if (isIg) {
-      // Lookup: username → account row (for pulling notes/hints later)
       const accByName = new Map(accounts.map(a => [a.username, a]));
       const notesFor = (u: string) => accByName.get(u)?.notes || null;
 
       if (sendOrder === 'grouped') {
-        // WATERFALL: fill each account to its remaining capacity in order,
-        // then move to next account. Result: consecutive leads in the queue
-        // share the same sender, so the operator switches accounts once per
-        // ~30 sends instead of every send.
-        let leadIdx = 0;
+        let targetIdx = 0;
         for (const acc of accountCapacity) {
-          for (let i = 0; i < acc.remaining && leadIdx < eligibleLeads.length; i++) {
-            const lead = eligibleLeads[leadIdx++];
+          for (let i = 0; i < acc.remaining && targetIdx < targets.length; i++) {
+            const t = targets[targetIdx++];
             rows.push({
-              lead, sender_account: acc.username,
+              lead: t.lead, sender_account: acc.username,
               sender_notes: notesFor(acc.username),
-              message: personalize(template.content, lead), outcome: 'pending',
+              message: personalize(t.templateContent, t.lead), outcome: 'pending',
             });
           }
-          if (leadIdx >= eligibleLeads.length) break;
+          if (targetIdx >= targets.length) break;
         }
       } else {
-        // ROUND-ROBIN (legacy) — 1 lead per account then rotate. Fairer mix
-        // but every send is on a different account.
+        // Round-robin
         const takes = new Map<string, number>();
         let cursor = 0;
-        for (const lead of eligibleLeads) {
+        for (const t of targets) {
           let assigned: string | null = null;
           for (let i = 0; i < accountCapacity.length; i++) {
             const acc = accountCapacity[(cursor + i) % accountCapacity.length];
@@ -421,21 +482,21 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
           }
           if (!assigned) break;
           rows.push({
-            lead, sender_account: assigned,
+            lead: t.lead, sender_account: assigned,
             sender_notes: notesFor(assigned),
-            message: personalize(template.content, lead), outcome: 'pending',
+            message: personalize(t.templateContent, t.lead), outcome: 'pending',
           });
         }
       }
     } else {
-      // WhatsApp: single sender (user's personal WA), cap at safe daily.
-      const cap = Math.min(eligibleLeads.length, WHATSAPP_SAFE_DAILY_CAP);
+      // WhatsApp: single sender, cap at safe daily
+      const cap = Math.min(targets.length, WHATSAPP_SAFE_DAILY_CAP);
       for (let i = 0; i < cap; i++) {
-        const lead = eligibleLeads[i];
+        const t = targets[i];
         rows.push({
-          lead, sender_account: 'personal_whatsapp',
+          lead: t.lead, sender_account: 'personal_whatsapp',
           sender_notes: null,
-          message: personalize(template.content, lead), outcome: 'pending',
+          message: personalize(t.templateContent, t.lead), outcome: 'pending',
         });
       }
     }
@@ -1074,6 +1135,68 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   </div>
                 );
               })()}
+
+              {/* Intelligent outreach — freshness split.
+                  Shows the fresh vs already-messaged split from the current
+                  selection. Fresh leads get the primary template above.
+                  Already-messaged leads are excluded by default; toggle on
+                  + pick a follow-up template to include them in the queue
+                  with a different message. */}
+              {eligibleLeads.length > 0 && (
+                <div className={cn('p-3 rounded border',
+                  followUpLeads.length > 0
+                    ? 'border-amber-500/30 bg-amber-500/5'
+                    : 'border-prospex-green/30 bg-prospex-green/5')}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+                    <p className="text-[11px] font-mono text-prospex-text">
+                      🧠 <span className="text-prospex-green">{freshLeads.length} fresh</span>
+                      {followUpLeads.length > 0 && <>
+                        {' · '}<span className="text-amber-400">{followUpLeads.length} already messaged</span>
+                      </>}
+                    </p>
+                    <span className="text-[9px] text-prospex-dim">
+                      based on {alreadyMessagedIds.size > 0 ? 'ALL prior sends from ANY account' : 'no prior sends detected'}
+                    </span>
+                  </div>
+                  {followUpLeads.length > 0 && (
+                    <>
+                      <label className="flex items-start gap-2 cursor-pointer mb-2">
+                        <input type="checkbox"
+                          checked={includeAlreadyMessaged}
+                          onChange={e => setIncludeAlreadyMessaged(e.target.checked)}
+                          className="w-4 h-4 mt-0.5 rounded border-amber-500/40 bg-prospex-bg accent-amber-400 flex-shrink-0" />
+                        <span className="text-[11px] text-prospex-text">
+                          Also send follow-ups to the {followUpLeads.length} already-messaged lead{followUpLeads.length === 1 ? '' : 's'} using a different template.
+                          <span className="block text-[10px] text-prospex-dim mt-0.5">
+                            When off, they&apos;re silently excluded from the queue — keeps you from double-sending the same cold opener.
+                          </span>
+                        </span>
+                      </label>
+                      {includeAlreadyMessaged && (
+                        <div className="pl-6 pt-2 border-t border-amber-500/20">
+                          <label className="text-[10px] font-mono uppercase text-prospex-dim block mb-1.5">Follow-up template <span className="text-[9px] normal-case">(used for already-messaged leads)</span></label>
+                          <select value={followUpTemplateId} onChange={e => setFollowUpTemplateId(e.target.value)} className="input w-full text-xs">
+                            <option value="">— pick a follow-up template —</option>
+                            {templates.filter(t => t.category === 'follow_up' || t.category === 'objection').map(t => (
+                              <option key={t.id} value={t.id}>{t.category === 'objection' ? '🛡️ ' : '🔁 '}{t.name}</option>
+                            ))}
+                          </select>
+                          {!followUpTemplateId && (
+                            <p className="text-[10px] text-amber-400 mt-1">
+                              ⚠ Pick a follow-up template or they&apos;ll still be excluded from the queue.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {followUpLeads.length === 0 && (
+                    <p className="text-[10px] text-prospex-dim">
+                      All selected leads are fresh — no prior send detected from any of your accounts. Full cold-open queue ahead.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {error && (
                 <div className="p-2 bg-prospex-red/10 border border-prospex-red/30 rounded text-[11px] text-prospex-red">
