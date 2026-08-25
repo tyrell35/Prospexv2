@@ -146,11 +146,16 @@ async function getStats(body: { country_code?: string; assigned_to?: string }) {
   const since = new Date(Date.now() - 30 * 86400_000).toISOString();
   const { data: logs } = await supabase
     .from('call_logs')
-    .select('outcome, reached_owner, called_at, called_by')
+    .select('outcome, reached_owner, called_at, called_by, source')
     .gte('called_at', since)
     .limit(20000);
 
-  const rows = (logs || []) as Array<{ outcome: string; reached_owner: boolean; called_at: string; called_by: string | null }>;
+  // Only real dials count. Board drags ('stage_move') and GHL events still
+  // awaiting a disposition ('answered_pending') sit in the same table but
+  // would otherwise pad the denominator and understate the contact rate.
+  const NON_DIAL = new Set(['stage_move', 'answered_pending']);
+  const rows = ((logs || []) as Array<{ outcome: string; reached_owner: boolean; called_at: string; called_by: string | null; source: string | null }>)
+    .filter(r => r.source !== 'board' && !NON_DIAL.has(r.outcome));
   const contacts = rows.filter(r => OUTCOME_BY_ID[r.outcome as CallOutcome]?.isContact).length;
   const ownerReached = rows.filter(r => r.reached_owner).length;
   const booked = rows.filter(r => r.outcome === 'booked' || r.outcome === 'closed_won').length;

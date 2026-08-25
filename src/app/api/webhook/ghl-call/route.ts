@@ -92,8 +92,8 @@ export async function POST(request: NextRequest) {
         keys = peek && typeof peek === 'object' ? Object.keys(peek).slice(0, 40) : [];
       } catch { /* body wasn't JSON — the key list simply stays empty */ }
 
-      await supabase.from('webhook_logs').insert({
-        source: 'ghl_call',
+      const { error: logErr } = await supabase.from('webhook_logs').insert({
+        source: 'ghl',
         event_type: 'rejected_auth',
         payload: {
           secret_length: supplied.length,
@@ -106,6 +106,7 @@ export async function POST(request: NextRequest) {
           'GoHighLevel webhook action against the Vercel env var — a trailing space or ' +
           'newline is the usual cause.',
       });
+      if (logErr) console.error('[ghl-call-webhook] rejected_auth log failed:', logErr.message);
     }
     return gate;
   }
@@ -167,13 +168,14 @@ export async function POST(request: NextRequest) {
     if (!lead) {
       // Log it so nothing is silently dropped, then acknowledge — a 200
       // stops GHL retrying a payload we will never be able to match.
-      await supabase.from('webhook_logs').insert({
-        source: 'ghl_call',
-        event_type: rawStatus || 'unknown',
+      const { error: logErr } = await supabase.from('webhook_logs').insert({
+        source: 'ghl',
+        event_type: `call_unmatched:${rawStatus || 'unknown'}`,
         payload: body as unknown as Record<string, unknown>,
         processed: false,
-        error_message: 'no matching lead',
+        error_message: 'No lead matched this GHL contact id or phone number',
       });
+      if (logErr) console.error('[ghl-call-webhook] unmatched log failed:', logErr.message);
       return NextResponse.json({ success: false, matched: false, reason: 'No lead matched this contact or number' });
     }
 
@@ -251,14 +253,15 @@ export async function POST(request: NextRequest) {
       // names GHL sends can be read back during setup:
       //   select payload from webhook_logs
       //   where source = 'ghl_call' order by created_at desc limit 5;
-      await supabase.from('webhook_logs').insert({
-        source: 'ghl_call',
-        event_type: rawStatus || 'unknown',
+      const { error: logErr } = await supabase.from('webhook_logs').insert({
+        source: 'ghl',
+        event_type: `call_unmapped:${rawStatus || 'unknown'}`,
         payload: body as unknown as Record<string, unknown>,
         processed: false,
         lead_id: lead.id,
         error_message: `Unmapped call status "${rawStatus}" — add it to STATUS_MAP if it should advance the lead`,
       });
+      if (logErr) console.error('[ghl-call-webhook] unmapped log failed:', logErr.message);
       return NextResponse.json({
         success: true, matched: true, lead_id: lead.id,
         ignored: `Unmapped status "${rawStatus}"`,
