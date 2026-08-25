@@ -50,6 +50,7 @@ interface CallLead {
   call_attempts: number | null;
   first_call_at: string | null;
   phone?: string | null;
+  ghl_contact_id?: string | null;
 }
 
 interface GhlCallPayload {
@@ -105,15 +106,27 @@ export async function POST(request: NextRequest) {
         : (body.to || body.phone || body.contact?.phone);
       const key = phoneKey(candidate);
       if (key) {
-        // Postgres can't index a suffix match, so narrow by ilike then
-        // confirm the last-10 digits in JS.
+        // leads.phone_key is a generated, indexed column holding the same
+        // last-10-digits normalisation, so this is a single index lookup.
+        // A plain LIKE on `phone` cannot work here: stored numbers are
+        // formatted ("+1 704-751-7124") and never contain the raw digit run.
         const { data } = await supabase
           .from('leads')
-          .select('id, timezone, call_stage, call_attempts, first_call_at, business_name, phone')
-          .ilike('phone', `%${key.slice(-7)}%`)
-          .limit(25);
-        const rows = (data || []) as CallLead[];
-        lead = rows.find(r => phoneKey(r.phone) === key) || null;
+          .select('id, timezone, call_stage, call_attempts, first_call_at, business_name, phone, ghl_contact_id')
+          // Most recently dialled first: ~670 leads are chain locations
+          // sharing one head-office number (sk:n, Thérapie, VIVO), so the
+          // branch the operator just rang is the right one to attach to.
+          .eq('phone_key', key)
+          .order('last_call_at', { ascending: false, nullsFirst: false })
+          .order('lead_score', { ascending: false, nullsFirst: false })
+          .limit(1);
+        lead = ((data || [])[0] as CallLead | undefined) ?? null;
+
+        // Learn the GHL contact id so subsequent events skip the fallback
+        // and land on this exact lead rather than a sibling branch.
+        if (lead && contactId && !lead.ghl_contact_id) {
+          await supabase.from('leads').update({ ghl_contact_id: contactId }).eq('id', lead.id);
+        }
       }
     }
 
@@ -200,7 +213,23 @@ export async function POST(request: NextRequest) {
 
     // ─── Unambiguous no-contact: safe to advance automatically ─
     if (!mapped) {
-      return NextResponse.json({ success: true, matched: true, ignored: `Unmapped status "${rawStatus}"`, lead_id: lead.id });
+      // Status we don't recognise. Keep the raw payload so the exact field
+      // names GHL sends can be read back during setup:
+      //   select payload from webhook_logs
+      //   where source = 'ghl_call' order by created_at desc limit 5;
+      await supabase.from('webhook_logs').insert({
+        source: 'ghl_call',
+        event_type: rawStatus || 'unknown',
+        payload: body as unknown as Record<string, unknown>,
+        processed: false,
+        lead_id: lead.id,
+        error_message: `Unmapped call status "${rawStatus}" — add it to STATUS_MAP if it should advance the lead`,
+      });
+      return NextResponse.json({
+        success: true, matched: true, lead_id: lead.id,
+        ignored: `Unmapped status "${rawStatus}"`,
+        hint: 'Payload saved to webhook_logs for inspection.',
+      });
     }
 
     const cfg = OUTCOME_BY_ID[mapped];
