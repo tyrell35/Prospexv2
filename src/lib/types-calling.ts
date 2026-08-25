@@ -52,6 +52,7 @@ export interface CallLead {
   outreach_status: string | null;
   responded_at: string | null;
   ghl_contact_id: string | null;
+  ghl_location_id: string | null;
 }
 
 export interface CallStats {
@@ -74,4 +75,8 @@ export interface CallFilterOptions {
   timezones: string[];
   assignees: string[];
   team: Array<{ email: string; full_name: string | null }>;
+  ghl_accounts: Array<{
+    key: string; label: string; short: string; emoji: string;
+    countries: string[]; configured: boolean;
+  }>;
 }

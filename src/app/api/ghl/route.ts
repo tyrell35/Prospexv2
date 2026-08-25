@@ -2,10 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { supabaseAdmin as supabase } from "@/lib/supabase-admin";
 import { authOr401 } from "@/lib/api-auth";
-
-function getKey(envKey: string): string {
-  return process.env[envKey] || '';
-}
+import { accountForCountry } from "@/lib/ghl-accounts";
 
 export async function POST(request: NextRequest) {
   const _auth = await authOr401(); if (_auth instanceof Response) return _auth;
@@ -15,17 +12,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'leadId is required' }, { status: 400 });
     }
 
-    const apiKey = getKey('GHL_API_KEY');
-    const locationId = getKey('GHL_LOCATION_ID');
-
-    if (!apiKey) {
-      return NextResponse.json({ error: 'GoHighLevel API key not configured. Add it in Settings.' }, { status: 400 });
-    }
-    if (!locationId) {
-      return NextResponse.json({ error: 'GoHighLevel Location ID not configured. Add it in Settings.' }, { status: 400 });
-    }
-
-    // Get lead
+    // Get lead first — which GHL sub-account to use depends on its country.
     const { data: lead, error: leadError } = await supabase
       .from('leads')
       .select('*')
@@ -35,6 +22,24 @@ export async function POST(request: NextRequest) {
     if (leadError || !lead) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
+
+    // Dialling is split by region: the UK account cannot call US numbers and
+    // the North America account cannot call UK ones, so the contact has to
+    // land in the account that can actually reach it.
+    const account = accountForCountry(lead.country_code);
+    if (!account) {
+      return NextResponse.json({
+        error: `No GoHighLevel sub-account covers ${lead.country_code || "this lead's country"}.`,
+      }, { status: 400 });
+    }
+    if (!account.configured) {
+      return NextResponse.json({
+        error: `${account.label} is not configured. Set GHL_${account.key.toUpperCase()}_LOCATION_ID `
+             + `and GHL_${account.key.toUpperCase()}_API_KEY in Vercel.`,
+      }, { status: 400 });
+    }
+    const apiKey = account.apiKey;
+    const locationId = account.locationId;
 
     // Build tags
     const tags: string[] = [
@@ -136,6 +141,7 @@ export async function POST(request: NextRequest) {
     // Update lead in Supabase
     await supabase.from('leads').update({
       ghl_contact_id: contactId,
+      ghl_location_id: locationId,
       ghl_pushed_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq('id', leadId);
@@ -143,11 +149,11 @@ export async function POST(request: NextRequest) {
     // Log activity
     await supabase.from('activity_log').insert({
       action_type: 'ghl_push',
-      description: `Pushed ${lead.business_name} to GoHighLevel (Contact: ${contactId})`,
+      description: `Pushed ${lead.business_name} to ${account.label} (Contact: ${contactId})`,
       lead_id: leadId,
     });
 
-    return NextResponse.json({ success: true, contactId });
+    return NextResponse.json({ success: true, contactId, account: account.label });
   } catch (err: any) {
     console.error('GHL push error:', err);
     return NextResponse.json({ error: err.message || 'GHL push failed' }, { status: 500 });

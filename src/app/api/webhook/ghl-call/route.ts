@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin as supabase } from '@/lib/supabase-admin';
 import { verifyWebhookSecret } from '@/lib/api-auth';
 import { OUTCOME_BY_ID, nextCallAfter, localTimeLabel, type CallOutcome } from '@/lib/calling';
+import { accountByLocationId, accountForCountry, routingMismatch } from '@/lib/ghl-accounts';
 
 // ═══════════════════════════════════════════════════════════════
 // GOHIGHLEVEL CALL WEBHOOK
@@ -51,6 +52,8 @@ interface CallLead {
   first_call_at: string | null;
   phone?: string | null;
   ghl_contact_id?: string | null;
+  ghl_location_id?: string | null;
+  country_code?: string | null;
 }
 
 interface GhlCallPayload {
@@ -63,6 +66,7 @@ interface GhlCallPayload {
   to?: string; from?: string; phone?: string;
   userId?: string; userEmail?: string; user?: { email?: string; name?: string };
   contact?: { id?: string; phone?: string; email?: string };
+  locationId?: string; location_id?: string; location?: { id?: string };
 }
 
 /** Last 10 digits — enough to match a number across formatting styles. */
@@ -121,17 +125,24 @@ export async function POST(request: NextRequest) {
     const recording  = body.recordingUrl || body.recording_url || null;
     const direction  = body.direction || null;
     const calledBy   = body.userEmail || body.user?.email || body.user?.name || null;
+    // Which sub-account placed the call. Both the UK and the US/CA
+    // workflows post here, so this is what tells them apart.
+    const locationId = body.locationId || body.location_id || body.location?.id || null;
+    const account    = accountByLocationId(locationId);
 
     // ─── Resolve the lead: GHL contact id first, then phone ───
     let lead: CallLead | null = null;
 
     if (contactId) {
-      const { data } = await supabase
+      // A GHL contact id is only unique within its location, so scope the
+      // lookup when we know which sub-account fired.
+      let q = supabase
         .from('leads')
-        .select('id, timezone, call_stage, call_attempts, first_call_at, business_name')
-        .eq('ghl_contact_id', contactId)
-        .maybeSingle();
-      lead = (data as CallLead | null) ?? null;
+        .select('id, timezone, call_stage, call_attempts, first_call_at, business_name, ghl_location_id, country_code')
+        .eq('ghl_contact_id', contactId);
+      if (locationId) q = q.or(`ghl_location_id.eq.${locationId},ghl_location_id.is.null`);
+      const { data } = await q.limit(1);
+      lead = ((data || [])[0] as CallLead | undefined) ?? null;
     }
 
     if (!lead) {
@@ -145,13 +156,20 @@ export async function POST(request: NextRequest) {
         // last-10-digits normalisation, so this is a single index lookup.
         // A plain LIKE on `phone` cannot work here: stored numbers are
         // formatted ("+1 704-751-7124") and never contain the raw digit run.
-        const { data } = await supabase
+        let q = supabase
           .from('leads')
-          .select('id, timezone, call_stage, call_attempts, first_call_at, business_name, phone, ghl_contact_id')
-          // Most recently dialled first: ~670 leads are chain locations
-          // sharing one head-office number (sk:n, Thérapie, VIVO), so the
-          // branch the operator just rang is the right one to attach to.
-          .eq('phone_key', key)
+          .select('id, timezone, call_stage, call_attempts, first_call_at, business_name, phone, ghl_contact_id, ghl_location_id, country_code')
+          .eq('phone_key', key);
+
+        // The calling sub-account narrows the field before anything else:
+        // the US/CA account can only have dialled a US or CA lead, so a
+        // same-number UK branch is not a candidate.
+        if (account) q = q.in('country_code', account.countries);
+
+        // Then most recently dialled first — ~670 leads are chain branches
+        // sharing one head-office number (sk:n, Thérapie, VIVO), so the
+        // branch the operator just rang is the right one to attach to.
+        const { data } = await q
           .order('last_call_at', { ascending: false, nullsFirst: false })
           .order('lead_score', { ascending: false, nullsFirst: false })
           .limit(1);
@@ -160,7 +178,9 @@ export async function POST(request: NextRequest) {
         // Learn the GHL contact id so subsequent events skip the fallback
         // and land on this exact lead rather than a sibling branch.
         if (lead && contactId && !lead.ghl_contact_id) {
-          await supabase.from('leads').update({ ghl_contact_id: contactId }).eq('id', lead.id);
+          await supabase.from('leads')
+            .update({ ghl_contact_id: contactId, ghl_location_id: locationId })
+            .eq('id', lead.id);
         }
       }
     }
@@ -216,6 +236,7 @@ export async function POST(request: NextRequest) {
           ghl_call_id: ghlCallId,
           ghl_contact_id: contactId,
           ghl_direction: direction,
+          ghl_location_id: locationId,
         }).eq('id', manual.id);
         return NextResponse.json({ success: true, matched: true, attached_to_manual: true, lead_id: lead.id });
       }
@@ -235,6 +256,8 @@ export async function POST(request: NextRequest) {
         ghl_call_id: ghlCallId,
         ghl_contact_id: contactId,
         ghl_direction: direction,
+        ghl_location_id: locationId,
+        routing_warning: routingMismatch(lead.country_code, locationId),
         notes: 'Answered in GoHighLevel — awaiting a disposition in the call console.',
         source: 'ghl_webhook',
       });
@@ -287,6 +310,8 @@ export async function POST(request: NextRequest) {
       ghl_call_id: ghlCallId,
       ghl_contact_id: contactId,
       ghl_direction: direction,
+      ghl_location_id: locationId,
+      routing_warning: routingMismatch(lead.country_code, locationId),
       notes: `Auto-logged from GoHighLevel (${rawStatus})`,
       source: 'ghl_webhook',
     });
@@ -306,9 +331,14 @@ export async function POST(request: NextRequest) {
     }
     await supabase.from('leads').update(update).eq('id', lead.id);
 
+    const warning = routingMismatch(lead.country_code, locationId);
+    if (warning) console.warn('[ghl-call-webhook]', warning);
+
     return NextResponse.json({
       success: true, matched: true, lead_id: lead.id,
       business: lead.business_name, outcome: mapped, stage: update.call_stage || lead.call_stage,
+      ghl_account: account ? account.label : (locationId ? `unrecognised location ${locationId}` : 'no locationId sent'),
+      routing_warning: warning,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'GHL call webhook error';

@@ -6,6 +6,7 @@ import {
   OUTCOME_BY_ID, nextCallAfter, localTimeLabel,
   type CallOutcome, type CallStage,
 } from '@/lib/calling';
+import { ghlAccounts, publicAccounts } from '@/lib/ghl-accounts';
 
 // ═══════════════════════════════════════════════════════════════
 // COLD CALL PIPELINE
@@ -23,7 +24,7 @@ const LEAD_FIELDS =
   'owner_name, owner_first_name, owner_role, owner_source, owner_confidence, owner_enriched_at, ' +
   'call_stage, call_outcome, call_attempts, first_call_at, last_call_at, next_call_at, ' +
   'callback_at, call_notes, call_assigned_to, call_booked_at, do_not_call, dnc_reason, gatekeeper_name, ' +
-  'outreach_status, responded_at, ghl_contact_id, estimated_monthly_loss';
+  'outreach_status, responded_at, ghl_contact_id, ghl_location_id, estimated_monthly_loss';
 
 export async function POST(request: NextRequest) {
   const auth = await authOr401();
@@ -59,6 +60,8 @@ export async function POST(request: NextRequest) {
 interface PipelineBody {
   stages?: CallStage[];
   country_code?: string;
+  /** Restrict to the countries one GHL sub-account is able to dial. */
+  ghl_account?: string;
   city?: string;
   county?: string;
   niche?: string;
@@ -87,6 +90,12 @@ async function getPipeline(body: PipelineBody) {
   if (body.has_phone !== false) q = q.not('phone', 'is', null);
   if (body.stages?.length)      q = q.in('call_stage', body.stages);
   if (body.country_code)        q = q.eq('country_code', body.country_code);
+  // Each GHL sub-account can only dial its own region, so filtering by
+  // account is really a filter over the countries it covers.
+  if (body.ghl_account) {
+    const acct = ghlAccounts().find(a => a.key === body.ghl_account);
+    if (acct) q = q.in('country_code', acct.countries);
+  }
   if (body.city)                q = q.eq('city', body.city);
   if (body.county)              q = q.eq('county', body.county);
   if (body.niche)               q = q.eq('niche', body.niche);
@@ -421,6 +430,7 @@ async function getFilterOptions() {
       timezones: uniq('timezone'),
       assignees: uniq('call_assigned_to'),
       team: (team || []) as Array<{ email: string; full_name: string | null }>,
+      ghl_accounts: publicAccounts(),
     },
   });
 }

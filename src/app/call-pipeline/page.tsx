@@ -34,6 +34,7 @@ interface Filters {
   niche: string;
   priority: string;
   assigned_to: string;
+  ghl_account: string;
   owner: OwnerFilter;
   attempts: AttemptFilter;
   minScore: number;
@@ -43,7 +44,7 @@ interface Filters {
 }
 
 const EMPTY_FILTERS: Filters = {
-  search: '', country_code: '', city: '', niche: '', priority: '', assigned_to: '',
+  search: '', country_code: '', city: '', niche: '', priority: '', assigned_to: '', ghl_account: '',
   owner: 'any', attempts: 'any', minScore: 0,
   callableNow: false, dueOnly: false, neverDm: false,
 };
@@ -83,6 +84,7 @@ export default function CallPipelinePage() {
         niche: filters.niche || undefined,
         priority: filters.priority || undefined,
         assigned_to: filters.assigned_to || undefined,
+        ghl_account: filters.ghl_account || undefined,
         owner_known: filters.owner === 'any' ? undefined : filters.owner,
         search: filters.search || undefined,
         min_score: filters.minScore || undefined,
@@ -102,8 +104,8 @@ export default function CallPipelinePage() {
       setLoading(false);
     }
   }, [filters.country_code, filters.city, filters.niche, filters.priority,
-      filters.assigned_to, filters.owner, filters.search, filters.minScore,
-      filters.dueOnly, filters.neverDm]);
+      filters.assigned_to, filters.ghl_account, filters.owner, filters.search,
+      filters.minScore, filters.dueOnly, filters.neverDm]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -158,6 +160,7 @@ export default function CallPipelinePage() {
     if (filters.niche) n++;
     if (filters.priority) n++;
     if (filters.assigned_to) n++;
+    if (filters.ghl_account) n++;
     if (filters.owner !== 'any') n++;
     if (filters.attempts !== 'any') n++;
     if (filters.minScore > 0) n++;
@@ -313,6 +316,13 @@ export default function CallPipelinePage() {
             title="No Instagram DM has gone out — a genuinely cold intro is safe">❄️ Not DM&apos;d</Toggle>
           <Toggle active={filters.priority === 'hot'} onClick={() => set('priority', filters.priority === 'hot' ? '' : 'hot')}
             title="Hot priority only">🔥 Hot</Toggle>
+          {options?.ghl_accounts?.map(a => (
+            <Toggle key={a.key} active={filters.ghl_account === a.key}
+              onClick={() => set('ghl_account', filters.ghl_account === a.key ? '' : a.key)}
+              title={`Only leads ${a.label} can dial (${a.countries.join(', ')})`}>
+              {a.emoji} {a.short}
+            </Toggle>
+          ))}
           {activeFilterCount > 0 && (
             <button onClick={() => setFilters(EMPTY_FILTERS)}
               className="text-[11px] font-mono text-prospex-dim hover:text-prospex-red px-2 py-1">clear all</button>
@@ -337,6 +347,16 @@ export default function CallPipelinePage() {
               <select value={filters.niche} onChange={e => set('niche', e.target.value)} className="input">
                 <option value="">All niches</option>
                 {options?.niches.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </Field>
+            <Field label="Dial from (GHL account)">
+              <select value={filters.ghl_account} onChange={e => set('ghl_account', e.target.value)} className="input">
+                <option value="">Either account</option>
+                {options?.ghl_accounts?.map(a => (
+                  <option key={a.key} value={a.key}>
+                    {a.emoji} {a.label}{a.configured ? '' : ' — not configured'}
+                  </option>
+                ))}
               </select>
             </Field>
             <Field label="Assigned to">

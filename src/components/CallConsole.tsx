@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   Phone, X, ChevronLeft, ChevronRight, Star, Globe, Instagram, MapPin,
   Clock, User, AlertTriangle, Loader2, ExternalLink, History, StickyNote, Sparkles,
+  MessageSquare, Send, Building2,
 } from 'lucide-react';
 import { cn, getScoreColor } from '@/lib/utils';
 import {
@@ -50,6 +51,13 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
   const [enriching, setEnriching] = useState(false);
   const [tick, setTick] = useState(0);
 
+  // GoHighLevel bridge — dialling and messaging happen in GHL, not here.
+  const [ghlBusy, setGhlBusy] = useState<null | 'open' | 'sms'>(null);
+  const [ghlError, setGhlError] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<Array<{ key: string; label: string; emoji: string; countries: string[]; configured: boolean }>>([]);
+  const [smsOpen, setSmsOpen] = useState(false);
+  const [smsText, setSmsText] = useState('');
+
   const lead = queue[index];
 
   // Re-render each minute so the local clock and window stay honest.
@@ -62,8 +70,18 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
   useEffect(() => {
     setNotes(''); setSpokeTo(''); setCallbackAt('');
     setShowHistory(false); setEditingOwner(false);
+    setSmsOpen(false); setSmsText(''); setGhlError(null);
     setOwnerDraft(lead?.owner_name || '');
   }, [lead?.id, lead?.owner_name]);
+
+  // Which sub-account covers which country — fetched rather than hardcoded
+  // so the console and the server can never disagree about routing.
+  useEffect(() => {
+    fetch('/api/ghl-bridge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'accounts' }),
+    }).then(r => r.json()).then(d => setAccounts(d.accounts || [])).catch(() => {});
+  }, []);
 
   const loadHistory = useCallback(async () => {
     if (!lead) return;
@@ -166,6 +184,49 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
     }
   };
 
+  /**
+   * Open the lead inside GoHighLevel, creating the contact in the correct
+   * regional sub-account first if it isn't there yet. The actual dial then
+   * happens on GHL's own dialer — Prospex never places the call.
+   */
+  const openInGhl = async () => {
+    if (!lead || ghlBusy) return;
+    setGhlBusy('open'); setGhlError(null);
+    try {
+      const res = await fetch('/api/ghl-bridge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'open', lead_id: lead.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not open the lead in GoHighLevel');
+      lead.ghl_contact_id = data.contact_id;
+      window.open(data.url, '_blank', 'noopener');
+    } catch (err) {
+      setGhlError(err instanceof Error ? err.message : 'GoHighLevel bridge failed');
+    } finally {
+      setGhlBusy(null);
+    }
+  };
+
+  const sendSms = async () => {
+    if (!lead || !smsText.trim() || ghlBusy) return;
+    setGhlBusy('sms'); setGhlError(null);
+    try {
+      const res = await fetch('/api/ghl-bridge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'message', lead_id: lead.id, type: 'SMS', message: smsText.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not send the message');
+      setSmsText(''); setSmsOpen(false);
+      if (showHistory) loadHistory();
+    } catch (err) {
+      setGhlError(err instanceof Error ? err.message : 'Send failed');
+    } finally {
+      setGhlBusy(null);
+    }
+  };
+
   if (!lead) return null;
 
   const win = callWindow(lead.timezone, new Date(Date.now() + tick * 0));
@@ -176,6 +237,16 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
   const speakable = isSpeakableName(lead.owner_confidence);
   const firstName = firstNameOf(lead.owner_name);
   const tel = telHref(lead.phone);
+  const routed = accounts.find(a => lead.country_code && a.countries.includes(lead.country_code));
+
+  // Only greet by name when the name is actually verified — same rule the
+  // spoken opener follows.
+  const greeting = speakable && firstName ? `Hi ${firstName}` : 'Hi';
+  const smsTemplates = [
+    { label: 'info', body: `${greeting}, you asked for more info — sending it over now.` },
+    { label: 'recap', body: `${greeting}, great speaking just now. Here are the details we went through.` },
+    { label: 'missed', body: `${greeting}, tried you just now about ${lead.business_name}. When suits for a quick word?` },
+  ];
 
   return (
     <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-start md:items-center justify-center p-0 md:p-6 overflow-y-auto">
@@ -310,12 +381,26 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
           {/* ── Dial + channels ── */}
           <div className="px-4 md:px-5 py-4 border-b border-prospex-border">
             <div className="flex items-center gap-2 flex-wrap">
-              {tel ? (
-                <a href={tel} className="btn-success font-mono text-base px-5 py-2.5">
-                  <Phone className="w-4 h-4" />{lead.phone_formatted || lead.phone}
+              {/* Primary path: dial inside GoHighLevel. Prospex decides who to
+                  ring and remembers the outcome; GHL owns the phone line. */}
+              <button onClick={openInGhl} disabled={!!ghlBusy || !lead.phone}
+                title={routed ? `Opens in ${routed.label}` : 'Opens the contact in GoHighLevel'}
+                className="btn-success font-mono text-base px-5 py-2.5 disabled:opacity-40">
+                {ghlBusy === 'open' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Phone className="w-4 h-4" />}
+                {lead.phone_formatted || lead.phone || 'No number'}
+                <span className="text-[10px] opacity-70">↗ GHL</span>
+              </button>
+
+              <button onClick={() => setSmsOpen(v => !v)} disabled={!lead.phone}
+                className="btn-ghost text-xs border border-prospex-border disabled:opacity-40">
+                <MessageSquare className="w-3.5 h-3.5" />Send info
+              </button>
+
+              {tel && (
+                <a href={tel} className="btn-ghost text-xs border border-prospex-border"
+                   title="Fall back to this device's dialer — the call will NOT be logged by GoHighLevel">
+                  <Phone className="w-3.5 h-3.5" />Device
                 </a>
-              ) : (
-                <span className="text-sm text-prospex-red">No phone number on file</span>
               )}
               {lead.website && (
                 <a href={lead.website} target="_blank" rel="noopener noreferrer" className="btn-ghost text-xs">
@@ -339,7 +424,47 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
               {lead.outreach_status && lead.outreach_status !== 'not_started' && (
                 <span className="text-prospex-cyan/70">· IG: {lead.outreach_status.replace(/_/g, ' ')}</span>
               )}
+              {routed && (
+                <span className={cn('inline-flex items-center gap-1', routed.configured ? 'text-prospex-muted' : 'text-amber-300')}
+                  title={routed.configured ? `${lead.country_code} leads are dialled from ${routed.label}` : `${routed.label} has no credentials set in Vercel yet`}>
+                  <Building2 className="w-3 h-3" />{routed.emoji} {routed.label}
+                  {!routed.configured && ' · not configured'}
+                </span>
+              )}
             </div>
+
+            {ghlError && (
+              <div className="mt-2 flex items-start gap-2 px-3 py-2 rounded-lg bg-prospex-red/10 border border-prospex-red/30">
+                <AlertTriangle className="w-3.5 h-3.5 text-prospex-red mt-0.5 shrink-0" />
+                <p className="text-xs text-prospex-red/90">{ghlError}</p>
+              </div>
+            )}
+
+            {smsOpen && (
+              <div className="mt-3 p-3 rounded-lg bg-prospex-bg border border-prospex-border">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">
+                    SMS via {routed?.label || 'GoHighLevel'}
+                  </span>
+                  <div className="flex gap-1">
+                    {smsTemplates.map(t => (
+                      <button key={t.label} onClick={() => setSmsText(t.body)}
+                        className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-prospex-border text-prospex-dim hover:text-prospex-cyan">
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <textarea value={smsText} onChange={e => setSmsText(e.target.value)} rows={3}
+                  placeholder="What are you sending them?" className="input resize-none" />
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-[10px] font-mono text-prospex-dim">{smsText.length} chars · logged to this lead&apos;s timeline</span>
+                  <button onClick={sendSms} disabled={!smsText.trim() || !!ghlBusy} className="btn-primary text-xs disabled:opacity-40">
+                    {ghlBusy === 'sms' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}Send
+                  </button>
+                </div>
+              </div>
+            )}
 
             {showHistory && (
               <div className="mt-3 space-y-1.5 max-h-48 overflow-y-auto">
