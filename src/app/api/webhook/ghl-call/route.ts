@@ -74,7 +74,41 @@ function phoneKey(phone: string | null | undefined): string | null {
 
 export async function POST(request: NextRequest) {
   const gate = verifyWebhookSecret(request, 'GHL_WEBHOOK_SECRET');
-  if (gate) return gate;
+  if (gate) {
+    // A rejected secret is otherwise completely invisible: 401 out, nothing
+    // written, no way to tell "GoHighLevel is misconfigured" apart from
+    // "GoHighLevel hasn't fired yet". Leave a breadcrumb so setup is
+    // debuggable.
+    //
+    // Only logged when a secret WAS supplied but didn't match — i.e. a
+    // plausible misconfiguration rather than a random probe of the URL.
+    // Field NAMES are recorded, never values, so nothing attacker-supplied
+    // is persisted.
+    const supplied = request.headers.get('x-webhook-secret');
+    if (supplied) {
+      let keys: string[] = [];
+      try {
+        const peek = await request.clone().json();
+        keys = peek && typeof peek === 'object' ? Object.keys(peek).slice(0, 40) : [];
+      } catch { /* body wasn't JSON — the key list simply stays empty */ }
+
+      await supabase.from('webhook_logs').insert({
+        source: 'ghl_call',
+        event_type: 'rejected_auth',
+        payload: {
+          secret_length: supplied.length,
+          body_keys: keys,
+          user_agent: request.headers.get('user-agent'),
+        },
+        processed: false,
+        error_message:
+          'x-webhook-secret did not match GHL_WEBHOOK_SECRET. Compare the value in the ' +
+          'GoHighLevel webhook action against the Vercel env var — a trailing space or ' +
+          'newline is the usual cause.',
+      });
+    }
+    return gate;
+  }
 
   try {
     const body = (await request.json()) as GhlCallPayload;
