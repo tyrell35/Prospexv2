@@ -41,6 +41,8 @@ export interface CallLead {
   next_call_at: string | null;
   callback_at: string | null;
   call_notes: string | null;
+  call_draft: { notes?: string; spoke_to?: string; callback_at?: string } | null;
+  call_draft_updated_at: string | null;
   call_assigned_to: string | null;
   call_booked_at: string | null;
   do_not_call: boolean | null;

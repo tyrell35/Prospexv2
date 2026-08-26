@@ -23,6 +23,7 @@ const LEAD_FIELDS =
   'google_rating, google_review_count, lead_score, lead_priority, ' +
   'owner_name, owner_first_name, owner_role, owner_source, owner_confidence, owner_enriched_at, ' +
   'call_stage, call_outcome, call_attempts, first_call_at, last_call_at, next_call_at, ' +
+  'call_draft, call_draft_updated_at, ' +
   'callback_at, call_notes, call_assigned_to, call_booked_at, do_not_call, dnc_reason, gatekeeper_name, ' +
   'outreach_status, responded_at, ghl_contact_id, ghl_location_id, estimated_monthly_loss';
 
@@ -40,6 +41,9 @@ export async function POST(request: NextRequest) {
       case 'update_lead':    return updateLead(body);
       case 'set_dnc':        return setDnc(body);
       case 'get_history':    return getHistory(body);
+      case 'save_draft':     return saveDraft(body);
+      case 'save_note':      return saveNote(body, auth.email || 'unknown');
+      case 'get_drafts':     return getDrafts();
       case 'get_filters':    return getFilterOptions();
       case 'bulk_assign':    return bulkAssign(body);
       default:
@@ -159,12 +163,16 @@ async function getStats(body: { country_code?: string; assigned_to?: string }) {
     .gte('called_at', since)
     .limit(20000);
 
-  // Only real dials count. Board drags ('stage_move') and GHL events still
-  // awaiting a disposition ('answered_pending') sit in the same table but
-  // would otherwise pad the denominator and understate the contact rate.
-  const NON_DIAL = new Set(['stage_move', 'answered_pending']);
+  // Only real dials count. call_logs is the lead's whole timeline and also
+  // holds board drags, saved notes, SMS/email sends, and GHL events awaiting
+  // a disposition — all of which would pad the denominator and understate
+  // the contact rate.
+  //
+  // Allowlist rather than denylist: anything that is not a known dial
+  // disposition is not a dial, so a new timeline event type added later
+  // cannot silently corrupt these numbers.
   const rows = ((logs || []) as Array<{ outcome: string; reached_owner: boolean; called_at: string; called_by: string | null; source: string | null }>)
-    .filter(r => r.source !== 'board' && !NON_DIAL.has(r.outcome));
+    .filter(r => !!OUTCOME_BY_ID[r.outcome as CallOutcome]);
   const contacts = rows.filter(r => OUTCOME_BY_ID[r.outcome as CallOutcome]?.isContact).length;
   const ownerReached = rows.filter(r => r.reached_owner).length;
   const booked = rows.filter(r => r.outcome === 'booked' || r.outcome === 'closed_won').length;
@@ -234,6 +242,9 @@ async function logCall(body: LogCallBody, actorEmail: string) {
     last_call_at: nowIso,
     next_call_at: nextAt,
     updated_at: nowIso,
+    // The draft has been committed into this call — retire it.
+    call_draft: null,
+    call_draft_updated_at: null,
   };
   if (!lead.first_call_at) update.first_call_at = nowIso;
   if (body.callback_at)     update.callback_at = body.callback_at;
@@ -384,6 +395,113 @@ async function getHistory(body: { lead_id: string }) {
     .order('called_at', { ascending: false })
     .limit(50);
   return NextResponse.json({ success: true, calls: data || [] });
+}
+
+// ═══ NOTE DRAFTS ════════════════════════════════════════════
+// Autosaved from the console as the operator types. This is scratch
+// state, not the record — committing happens via save_note or by
+// logging a call. Kept server-side so a note survives a refresh, a
+// closed tab, or moving from laptop to phone mid-call.
+
+interface DraftBody {
+  lead_id: string;
+  notes?: string;
+  spoke_to?: string;
+  callback_at?: string;
+}
+
+async function saveDraft(body: DraftBody) {
+  const { lead_id } = body;
+  if (!lead_id) return NextResponse.json({ error: 'lead_id required' }, { status: 400 });
+
+  const notes = (body.notes || '').trim();
+  const spokeTo = (body.spoke_to || '').trim();
+  const callbackAt = body.callback_at || '';
+  const empty = !notes && !spokeTo && !callbackAt;
+
+  const { error } = await supabase.from('leads').update({
+    // An emptied draft clears the row rather than storing blank strings,
+    // so "has an unfinished note" stays a meaningful query.
+    call_draft: empty ? null : { notes, spoke_to: spokeTo, callback_at: callbackAt },
+    call_draft_updated_at: empty ? null : new Date().toISOString(),
+  }).eq('id', lead_id);
+  if (error) throw new Error(error.message);
+
+  return NextResponse.json({ success: true, saved_at: new Date().toISOString(), cleared: empty });
+}
+
+// ═══ SAVE A NOTE WITHOUT DISPOSITIONING ═════════════════════
+// "Spoke to Amy, ring back Tuesday" is worth recording even when the
+// call has no outcome yet. Appends to the running log and shows up in
+// history, without touching the stage or the attempt count.
+
+async function saveNote(body: DraftBody & { note?: string }, actorEmail: string) {
+  const { lead_id } = body;
+  if (!lead_id) return NextResponse.json({ error: 'lead_id required' }, { status: 400 });
+
+  const note = (body.note ?? body.notes ?? '').trim();
+  const spokeTo = (body.spoke_to || '').trim();
+  if (!note && !spokeTo) {
+    return NextResponse.json({ error: 'Nothing to save — write a note or a name first' }, { status: 400 });
+  }
+
+  const { data: lead } = await supabase
+    .from('leads')
+    .select('call_notes, call_stage, gatekeeper_name')
+    .eq('id', lead_id)
+    .single();
+  if (!lead) return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
+
+  const now = new Date();
+  const stamp = now.toISOString().slice(0, 16).replace('T', ' ');
+  const parts = [spokeTo ? `spoke to ${spokeTo}` : null, note || null].filter(Boolean).join(' — ');
+  const entry = `[${stamp}] Note: ${parts}`;
+
+  const update: Record<string, unknown> = {
+    call_notes: lead.call_notes ? `${lead.call_notes}\n${entry}` : entry,
+    call_draft: null,
+    call_draft_updated_at: null,
+    updated_at: now.toISOString(),
+  };
+  if (spokeTo && !lead.gatekeeper_name) update.gatekeeper_name = spokeTo;
+  if (body.callback_at) {
+    update.callback_at = body.callback_at;
+    update.next_call_at = body.callback_at;
+  }
+
+  const { error: updErr } = await supabase.from('leads').update(update).eq('id', lead_id);
+  if (updErr) throw new Error(updErr.message);
+
+  // Visible in call history, but marked so it never counts as a dial.
+  const { error: logErr } = await supabase.from('call_logs').insert({
+    lead_id,
+    outcome: 'note',
+    stage_before: lead.call_stage,
+    stage_after: lead.call_stage,
+    called_by: actorEmail,
+    called_at: now.toISOString(),
+    spoke_to: spokeTo || null,
+    notes: note || null,
+    callback_at: body.callback_at || null,
+    source: 'note',
+  });
+  if (logErr) throw new Error(logErr.message);
+
+  return NextResponse.json({ success: true, saved_at: now.toISOString(), entry });
+}
+
+// ═══ UNFINISHED DRAFTS ══════════════════════════════════════
+// So a half-written note is recoverable without remembering which
+// lead it was on.
+
+async function getDrafts() {
+  const { data } = await supabase
+    .from('leads')
+    .select('id, business_name, city, call_stage, call_draft, call_draft_updated_at')
+    .not('call_draft', 'is', null)
+    .order('call_draft_updated_at', { ascending: false })
+    .limit(50);
+  return NextResponse.json({ success: true, drafts: data || [] });
 }
 
 // ═══ FILTER OPTIONS ═════════════════════════════════════════

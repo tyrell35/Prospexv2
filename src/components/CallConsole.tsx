@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import {
   Phone, X, ChevronLeft, ChevronRight, Star, Globe, Instagram, MapPin,
   Clock, User, AlertTriangle, Loader2, ExternalLink, History, StickyNote, Sparkles,
-  MessageSquare, Send, Building2,
+  MessageSquare, Send, Building2, Check, CloudOff, Save,
 } from 'lucide-react';
 import { cn, getScoreColor } from '@/lib/utils';
 import {
@@ -58,6 +58,21 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
   const [smsOpen, setSmsOpen] = useState(false);
   const [smsText, setSmsText] = useState('');
 
+  // ── Note drafts ──────────────────────────────────────────
+  // Notes used to live only in React state and were committed solely by
+  // tapping a disposition, so switching lead — or a mobile browser
+  // reclaiming the tab — threw them away silently. Three layers now:
+  //   1. localStorage on every keystroke  (instant, survives a crash)
+  //   2. debounced save to the server     (survives a device switch)
+  //   3. a flush on pagehide via beacon   (survives backgrounding)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'local'>('idle');
+  const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirrors the live capture so flush handlers read current values without
+  // being re-registered on every keystroke.
+  const draftRef = useRef({ leadId: '', notes: '', spokeTo: '', callbackAt: '' });
+
   const lead = queue[index];
 
   // Re-render each minute so the local clock and window stay honest.
@@ -66,13 +81,116 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
     return () => clearInterval(t);
   }, []);
 
-  // Reset per-call scratch fields whenever we move to a new lead.
+  // Moving to a new lead: flush whatever was being typed on the previous
+  // one, then hydrate this lead's draft. Nothing is discarded.
   useEffect(() => {
-    setNotes(''); setSpokeTo(''); setCallbackAt('');
+    const prev = draftRef.current;
+    if (prev.leadId && prev.leadId !== lead?.id && (prev.notes || prev.spokeTo || prev.callbackAt)) {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      pushDraft(prev);
+    }
+
+    if (!lead) return;
+    // Whichever copy is newer wins. The server copy is what survives a
+    // device switch; the local copy is what survives a failed autosave, and
+    // in that case it is the fresher of the two.
+    const server = lead.call_draft;
+    const local = readLocal(lead.id);
+    const serverAt = lead.call_draft_updated_at ? new Date(lead.call_draft_updated_at).getTime() : 0;
+    const localAt = local?.at || 0;
+    const useLocal = !!local && localAt > serverAt;
+    const restored = useLocal
+      ? { notes: local?.notes || '', spokeTo: local?.spokeTo || '', callbackAt: local?.callbackAt || '' }
+      : { notes: server?.notes || '', spokeTo: server?.spoke_to || '', callbackAt: server?.callback_at || '' };
+
+    setNotes(restored.notes);
+    setSpokeTo(restored.spokeTo);
+    setCallbackAt(restored.callbackAt);
+    draftRef.current = { leadId: lead.id, ...restored };
+    const hasDraft = !!(restored.notes || restored.spokeTo || restored.callbackAt);
+    setSaveState(hasDraft ? (useLocal ? 'local' : 'saved') : 'idle');
+    setSavedAt(useLocal ? new Date(localAt).toISOString() : lead.call_draft_updated_at || null);
+    // A local copy that never reached the server gets one more attempt now.
+    if (useLocal) pushDraft({ leadId: lead.id, ...restored });
+
     setShowHistory(false); setEditingOwner(false);
     setSmsOpen(false); setSmsText(''); setGhlError(null);
-    setOwnerDraft(lead?.owner_name || '');
+    setOwnerDraft(lead.owner_name || '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lead?.id, lead?.owner_name]);
+
+  const lsKey = (id: string) => `prospex:call-draft:${id}`;
+
+  const readLocal = (id: string) => {
+    try {
+      const raw = localStorage.getItem(lsKey(id));
+      return raw ? JSON.parse(raw) as { notes?: string; spokeTo?: string; callbackAt?: string; at?: number } : null;
+    } catch { return null; }
+  };
+  const writeLocal = (id: string, d: { notes: string; spokeTo: string; callbackAt: string }) => {
+    try {
+      if (!d.notes && !d.spokeTo && !d.callbackAt) localStorage.removeItem(lsKey(id));
+      // Stamped so a local copy written after a failed server save is not
+      // overwritten by the staler server copy on the next open.
+      else localStorage.setItem(lsKey(id), JSON.stringify({ ...d, at: Date.now() }));
+    } catch { /* private mode / quota — the server copy still covers us */ }
+  };
+  const clearLocal = (id: string) => { try { localStorage.removeItem(lsKey(id)); } catch {} };
+
+  /** Persist the draft server-side. `beacon` is used on pagehide, where a
+   *  normal fetch would be cancelled as the tab goes away. */
+  const pushDraft = useCallback((
+    d: { leadId: string; notes: string; spokeTo: string; callbackAt: string },
+    beacon = false,
+  ) => {
+    if (!d.leadId) return;
+    const payload = JSON.stringify({
+      action: 'save_draft', lead_id: d.leadId,
+      notes: d.notes, spoke_to: d.spokeTo, callback_at: d.callbackAt,
+    });
+    if (beacon && typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      // sendBeacon carries cookies, which is how the route authenticates.
+      navigator.sendBeacon('/api/call-pipeline', new Blob([payload], { type: 'application/json' }));
+      return;
+    }
+    setSaveState('saving');
+    fetch('/api/call-pipeline', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload, keepalive: true,
+    })
+      .then(r => { if (!r.ok) throw new Error(); setSaveState('saved'); setSavedAt(new Date().toISOString()); })
+      // The keystroke is already in localStorage, so say so rather than
+      // implying the note was lost.
+      .catch(() => setSaveState('local'));
+  }, []);
+
+  /** Called on every keystroke: local now, server shortly after. */
+  const touchDraft = useCallback((next: Partial<{ notes: string; spokeTo: string; callbackAt: string }>) => {
+    const d = { ...draftRef.current, ...next };
+    draftRef.current = d;
+    if (!d.leadId) return;
+    writeLocal(d.leadId, { notes: d.notes, spokeTo: d.spokeTo, callbackAt: d.callbackAt });
+    setSaveState('saving');
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => pushDraft(draftRef.current), 1200);
+  }, [pushDraft]);
+
+  // Flush when the tab is hidden or torn down — the common way a phone
+  // loses an unsaved note.
+  useEffect(() => {
+    const flush = () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      const d = draftRef.current;
+      if (d.leadId && (d.notes || d.spokeTo || d.callbackAt)) pushDraft(d, true);
+    };
+    const onVis = () => { if (document.visibilityState === 'hidden') flush(); };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVis);
+      flush();
+    };
+  }, [pushDraft]);
 
   // Which sub-account covers which country — fetched rather than hardcoded
   // so the console and the server can never disagree about routing.
@@ -137,6 +255,13 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to log the call');
+
+      // The disposition carried the draft with it — retire it so it cannot
+      // reappear on the next visit to this lead.
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      clearLocal(lead.id);
+      draftRef.current = { leadId: lead.id, notes: '', spokeTo: '', callbackAt: '' };
+      setSaveState('idle'); setSavedAt(null);
 
       setDone(prev => new Set(prev).add(lead.id));
       onLogged(lead.id, outcome);
@@ -205,6 +330,40 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
       setGhlError(err instanceof Error ? err.message : 'GoHighLevel bridge failed');
     } finally {
       setGhlBusy(null);
+    }
+  };
+
+  /** Commit the draft as a permanent note — no disposition required.
+   *  For "spoke to Amy, ring back Tuesday" when the call has no outcome yet. */
+  const saveNote = async () => {
+    if (!lead || noteSaving) return;
+    if (!notes.trim() && !spokeTo.trim()) return;
+    setNoteSaving(true);
+    try {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      const res = await fetch('/api/call-pipeline', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_note', lead_id: lead.id,
+          note: notes.trim(), spoke_to: spokeTo.trim(),
+          callback_at: callbackAt ? new Date(callbackAt).toISOString() : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not save the note');
+
+      // Committed — the draft is retired on both sides.
+      clearLocal(lead.id);
+      draftRef.current = { leadId: lead.id, notes: '', spokeTo: '', callbackAt: '' };
+      lead.call_notes = lead.call_notes ? `${lead.call_notes}\n${data.entry}` : data.entry;
+      lead.call_draft = null;
+      setNotes(''); setSpokeTo('');
+      setSaveState('idle'); setSavedAt(null);
+      if (showHistory) loadHistory();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Could not save the note');
+    } finally {
+      setNoteSaving(false);
     }
   };
 
@@ -498,22 +657,50 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
           </div>
 
           {/* ── Capture ── */}
-          <div className="px-4 md:px-5 py-4 border-b border-prospex-border grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">Who answered</label>
-              <input value={spokeTo} onChange={e => setSpokeTo(e.target.value)}
-                placeholder="Name, if you got one" className="input mt-1" />
+          <div className="px-4 md:px-5 py-4 border-b border-prospex-border">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">Capture</span>
+              {/* Never leave the operator guessing whether typing was kept. */}
+              <span className="text-[10px] font-mono inline-flex items-center gap-1">
+                {saveState === 'saving' && <><Loader2 className="w-3 h-3 animate-spin text-prospex-dim" /><span className="text-prospex-dim">Saving…</span></>}
+                {saveState === 'saved' && <><Check className="w-3 h-3 text-prospex-green" /><span className="text-prospex-green">Saved{savedAt ? ` ${new Date(savedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` : ''}</span></>}
+                {saveState === 'local' && <><CloudOff className="w-3 h-3 text-amber-400" /><span className="text-amber-300">Saved on this device — will sync</span></>}
+              </span>
             </div>
-            <div>
-              <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim inline-flex items-center gap-1">
-                <Clock className="w-3 h-3" />Callback time
-              </label>
-              <input type="datetime-local" value={callbackAt} onChange={e => setCallbackAt(e.target.value)} className="input mt-1" />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">Who answered</label>
+                <input value={spokeTo} onChange={e => { setSpokeTo(e.target.value); touchDraft({ spokeTo: e.target.value }); }}
+                  onBlur={() => pushDraft(draftRef.current)}
+                  placeholder="Name, if you got one" className="input mt-1" />
+              </div>
+              <div>
+                <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim inline-flex items-center gap-1">
+                  <Clock className="w-3 h-3" />Callback time
+                </label>
+                <input type="datetime-local" value={callbackAt}
+                  onChange={e => { setCallbackAt(e.target.value); touchDraft({ callbackAt: e.target.value }); }}
+                  onBlur={() => pushDraft(draftRef.current)} className="input mt-1" />
+              </div>
+              <div className="md:col-span-2">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">Notes</label>
+                <textarea value={notes} onChange={e => { setNotes(e.target.value); touchDraft({ notes: e.target.value }); }}
+                  onBlur={() => pushDraft(draftRef.current)} rows={3}
+                  placeholder="What was said, objections, when to try again" className="input mt-1 resize-none" />
+              </div>
             </div>
-            <div className="md:col-span-2">
-              <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">Notes</label>
-              <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2}
-                placeholder="What was said, objections, when to try again" className="input mt-1 resize-none" />
+
+            <div className="flex items-center justify-between gap-2 mt-2 flex-wrap">
+              <p className="text-[10px] font-mono text-prospex-dim">
+                Autosaves as you type. Tapping an outcome below files this with the call.
+              </p>
+              <button onClick={saveNote} disabled={noteSaving || (!notes.trim() && !spokeTo.trim())}
+                title="Record this against the lead without logging a call outcome"
+                className="btn-ghost text-xs border border-prospex-border disabled:opacity-40">
+                {noteSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                Save note only
+              </button>
             </div>
           </div>
         </div>
