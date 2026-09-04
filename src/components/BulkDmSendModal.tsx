@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 import { computeWarmupState } from '@/lib/ig-warmup';
 import { useAuth } from '@/lib/auth-context';
 import type { Lead } from '@/lib/types';
+import { isSendable, REACH_CONFIG, type ReachBand } from '@/lib/reachability';
 
 // ═══════════════════════════════════════════════════════
 // BULK DM SEND — the "seamless" fast IG DM workflow
@@ -315,11 +316,31 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   }, [isWa, waLastSentAt]);
 
   // ─── Filter leads with the required contact channel ──
-  const eligibleLeads = useMemo(
+  // Reachability gate. A DM to an account that stopped posting two years
+  // ago costs a send AND the sending account's warmth, and can never
+  // convert — so dormant/dead are held back by default. Unvetted leads are
+  // still sent (we have no evidence against them), just flagged.
+  const [excludeUnreachable, setExcludeUnreachable] = useState(true);
+
+  const contactableLeads = useMemo(
     () => leads.filter(l => leadContact(l, channel) !== null),
     [leads, channel]
   );
-  const skippedNoHandle = leads.length - eligibleLeads.length;
+  const unreachableLeads = useMemo(
+    () => contactableLeads.filter(l => !isSendable(l.reachability_band) && l.reachability_band != null && l.reachability_band !== 'unknown'),
+    [contactableLeads]
+  );
+  const unvettedCount = useMemo(
+    () => contactableLeads.filter(l => l.reachability_band == null).length,
+    [contactableLeads]
+  );
+  const eligibleLeads = useMemo(
+    () => excludeUnreachable
+      ? contactableLeads.filter(l => !unreachableLeads.includes(l))
+      : contactableLeads,
+    [contactableLeads, unreachableLeads, excludeUnreachable]
+  );
+  const skippedNoHandle = leads.length - contactableLeads.length;
 
   // ─── Prior-send lookup ───────────────────────────
   // For every eligible lead, check if it's ever had a 'sent' outreach_log.
@@ -1135,6 +1156,47 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   </div>
                 );
               })()}
+
+              {/* Reachability gate — is anyone home on the other end.
+                  Distinct from the freshness split below, which is about
+                  whether WE have already messaged them. */}
+              {(unreachableLeads.length > 0 || unvettedCount > 0) && (
+                <div className={cn('p-3 rounded border',
+                  unreachableLeads.length > 0
+                    ? 'border-prospex-red/30 bg-prospex-red/5'
+                    : 'border-prospex-border bg-prospex-bg')}>
+                  <p className="text-[11px] font-mono text-prospex-text mb-1.5">
+                    {unreachableLeads.length > 0 && (
+                      <span className="text-prospex-red/90">
+                        🚫 {unreachableLeads.length} dormant or dead
+                      </span>
+                    )}
+                    {unreachableLeads.length > 0 && unvettedCount > 0 && ' · '}
+                    {unvettedCount > 0 && (
+                      <span className="text-prospex-dim">❔ {unvettedCount} never vetted</span>
+                    )}
+                  </p>
+
+                  {unreachableLeads.length > 0 && (
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input type="checkbox" checked={excludeUnreachable}
+                        onChange={e => setExcludeUnreachable(e.target.checked)}
+                        className="mt-0.5 accent-[#00D4FF]" />
+                      <span className="text-[10px] text-prospex-muted leading-snug">
+                        Hold back accounts with no activity in over a year.
+                        <span className="text-prospex-dim"> A DM there spends a send and the sending account&apos;s warmth on someone who will never read it.</span>
+                      </span>
+                    </label>
+                  )}
+
+                  {unvettedCount > 0 && (
+                    <p className="text-[10px] text-prospex-dim mt-1.5 leading-snug">
+                      Unvetted leads are still sent — we have no evidence against them.
+                      Run <strong>Check IG</strong> on the Leads page to find the dormant ones first.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Intelligent outreach — freshness split.
                   Shows the fresh vs already-messaged split from the current

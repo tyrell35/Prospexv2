@@ -7,6 +7,7 @@ import { supabase } from '@/lib/supabase';
 import { cn, getScoreColor, getSourceConfig, getPriorityConfig, formatDate } from '@/lib/utils';
 import type { Lead, TableSort, TableFilter } from '@/lib/types';
 import { getLeadHealth, HEALTH_CONFIG, HEALTH_ORDER, type LeadHealth } from '@/lib/lead-health';
+import { REACH_CONFIG, REACH_ORDER, type ReachBand } from '@/lib/reachability';
 import QuickMessage from '@/components/QuickMessage';
 import OutreachBlaster from '@/components/OutreachBlaster';
 import BulkDmSendModal from '@/components/BulkDmSendModal';
@@ -38,6 +39,16 @@ function HealthBadge({ health }: { health: LeadHealth }) {
     <span className={cn('text-[10px] font-mono px-1.5 py-0.5 rounded border inline-flex items-center gap-1', cfg.bgClass, cfg.textClass, cfg.borderClass)}
       title={cfg.label}>
       <span>{cfg.emoji}</span> {cfg.short}
+    </span>
+  );
+}
+
+function ReachBadge({ band, score }: { band: string | null; score: number | null }) {
+  const cfg = REACH_CONFIG[(band || 'unknown') as ReachBand] || REACH_CONFIG.unknown;
+  return (
+    <span className={cn('text-[10px] font-mono px-1.5 py-0.5 rounded border inline-flex items-center gap-1',
+      cfg.bgClass, cfg.textClass, cfg.borderClass)} title={cfg.hint}>
+      <span>{cfg.emoji}</span>{cfg.short}{score != null ? ` ${score}` : ''}
     </span>
   );
 }
@@ -83,6 +94,8 @@ export default function LeadsPage() {
   const [fastBlastChannel, setFastBlastChannel] = useState<null | 'instagram' | 'whatsapp'>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [enriching, setEnriching] = useState(false);
+  const [reachFilter, setReachFilter] = useState<'all' | ReachBand>('all');
+  const [vetting, setVetting] = useState<null | 'score' | 'ig'>(null);
 
   // Unique values for filter dropdowns
   const [uniqueNiches, setUniqueNiches] = useState<string[]>([]);
@@ -194,6 +207,11 @@ export default function LeadsPage() {
       // uses the pre-resolved deadIdMask; 'no_channels' needs an all-NULL
       // combo (Supabase doesn't support AND-of-IS-NULL in .or(), so we use
       // separate .is() calls chained).
+      // Reachability — 'unknown' must also catch never-vetted rows, which
+      // hold NULL rather than the string.
+      if (reachFilter === 'unknown') query = query.or('reachability_band.eq.unknown,reachability_band.is.null');
+      else if (reachFilter !== 'all') query = query.eq('reachability_band', reachFilter);
+
       if (healthFilter === 'booked') query = query.eq('outreach_status', 'booked');
       else if (healthFilter === 'not_interested') query = query.eq('outreach_status', 'not_interested');
       else if (healthFilter === 'replied') query = query.not('responded_at', 'is', null);
@@ -236,7 +254,7 @@ export default function LeadsPage() {
       }
     } catch (error) { console.error('Failed to fetch leads:', error); }
     finally { setLoading(false); }
-  }, [sort, filter, page, nicheFilter, countryFilter, cityFilter, countyFilter, deviceIdMask, healthFilter, deadIdMask]);
+  }, [sort, filter, page, nicheFilter, countryFilter, cityFilter, countyFilter, deviceIdMask, healthFilter, deadIdMask, reachFilter]);
 
   useEffect(() => { fetchLeads(); }, [fetchLeads]);
 
@@ -273,7 +291,7 @@ export default function LeadsPage() {
     setPage(0);
   };
 
-  const activeFilterCount = [filter.source, filter.priority, nicheFilter, countryFilter, cityFilter, countyFilter, deviceTierFilter, deviceFilter.length > 0 ? 'devices' : null, healthFilter !== 'all' ? 'health' : null].filter(Boolean).length;
+  const activeFilterCount = [filter.source, filter.priority, nicheFilter, countryFilter, cityFilter, countyFilter, deviceTierFilter, deviceFilter.length > 0 ? 'devices' : null, healthFilter !== 'all' ? 'health' : null, reachFilter !== 'all' ? 'reach' : null].filter(Boolean).length;
 
   const toggleDeviceInFilter = (name: string) => {
     setDeviceFilter(prev => prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name]);
@@ -299,6 +317,32 @@ export default function LeadsPage() {
     } catch (e) {
       alert(e instanceof Error ? e.message : 'Enrich failed');
     } finally { setEnriching(false); }
+  };
+
+  /** Vet reachability. 'score' is free and instant; 'ig' bills Apify per
+   *  profile, so it is capped and always confirmed first. */
+  const vetLeads = async (mode: 'score' | 'ig') => {
+    if (vetting) return;
+    const ids = Array.from(selectedIds);
+    if (mode === 'ig') {
+      const n = ids.length || 50;
+      if (!confirm(`Check ${n} Instagram account${n === 1 ? '' : 's'} through Apify?\n\nReturns followers, post count and — the signal that matters — the date of the last post. Billed per profile.`)) return;
+    }
+    setVetting(mode);
+    try {
+      const res = await fetch('/api/vet-leads', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, lead_ids: ids, limit: mode === 'ig' ? 50 : 2000 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Vetting failed');
+      const summary = Object.entries(data.bands || {})
+        .map(([b, n]) => `${REACH_CONFIG[b as ReachBand]?.emoji || ''} ${n} ${b}`).join(' · ');
+      alert(`Vetted ${data.processed} lead${data.processed === 1 ? '' : 's'}.\n\n${summary || 'No bands returned.'}`);
+      fetchLeads();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Vetting failed');
+    } finally { setVetting(null); }
   };
 
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
@@ -349,6 +393,45 @@ export default function LeadsPage() {
             </button>
           );
         })}
+      </div>
+
+      {/* Reachability — "is anyone actually there". Separate from Status,
+          which tracks what WE have done; this tracks whether the account
+          on the other end is alive. */}
+      <div className="card p-2 flex items-center gap-1.5 flex-wrap overflow-x-auto">
+        <span className="text-[10px] font-mono text-prospex-dim uppercase pl-1 flex-shrink-0">Reachable</span>
+        <button onClick={() => { setReachFilter('all'); setPage(0); }}
+          className={cn('text-xs font-mono px-2.5 py-1 rounded border min-h-[32px] whitespace-nowrap',
+            reachFilter === 'all'
+              ? 'bg-prospex-cyan/20 text-prospex-cyan border-prospex-cyan/40'
+              : 'bg-prospex-bg text-prospex-dim border-prospex-border hover:text-prospex-text')}>
+          All
+        </button>
+        {REACH_ORDER.map(b => {
+          const cfg = REACH_CONFIG[b];
+          const isActive = reachFilter === b;
+          return (
+            <button key={b} onClick={() => { setReachFilter(b); setPage(0); }} title={cfg.hint}
+              className={cn('text-xs font-mono px-2.5 py-1 rounded border min-h-[32px] whitespace-nowrap flex items-center gap-1',
+                isActive ? `${cfg.bgClass} ${cfg.textClass} ${cfg.borderClass}`
+                         : 'bg-prospex-bg text-prospex-dim border-prospex-border hover:text-prospex-text',
+                !cfg.sendable && !isActive && 'opacity-60')}>
+              <span>{cfg.emoji}</span> {cfg.label}
+            </button>
+          );
+        })}
+        <div className="ml-auto flex items-center gap-1.5 pr-1">
+          <button onClick={() => vetLeads('score')} disabled={!!vetting}
+            title="Free. Scores reachability from data already held — reviews, website, available channels. Run this across everything first."
+            className="btn-ghost text-xs disabled:opacity-50">
+            {vetting === 'score' ? '⏳' : '⚡'} Score reachability
+          </button>
+          <button onClick={() => vetLeads('ig')} disabled={!!vetting || selectedIds.size === 0}
+            title="Checks selected Instagram accounts through Apify — followers, posts, and last post date. Billed per profile."
+            className="btn-ghost text-xs disabled:opacity-50">
+            {vetting === 'ig' ? '⏳' : '📸'} Check IG ({selectedIds.size})
+          </button>
+        </div>
       </div>
 
       {/* Priority Filter Tabs */}
@@ -592,6 +675,7 @@ export default function LeadsPage() {
                   {/* Score + priority + source + health */}
                   <div className="flex items-center gap-1.5 flex-wrap mt-2">
                     <HealthBadge health={getLeadHealth(lead, pageFetchFailedIds.has(lead.id))} />
+                    <ReachBadge band={lead.reachability_band} score={lead.reachability_score} />
                     {lead.lead_priority && <PriorityBadge priority={lead.lead_priority} />}
                     {lead.lead_score !== null && <ScoreBadge score={lead.lead_score} />}
                     <SourceBadge source={lead.source} />
@@ -667,6 +751,7 @@ export default function LeadsPage() {
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <Link href={`/leads/${lead.id}`} className="text-sm font-medium text-prospex-text hover:text-prospex-cyan transition-colors">{lead.business_name}</Link>
                       <HealthBadge health={getLeadHealth(lead, pageFetchFailedIds.has(lead.id))} />
+                    <ReachBadge band={lead.reachability_band} score={lead.reachability_score} />
                     </div>
                     <p className="text-xs text-prospex-dim mt-0.5 truncate max-w-[200px]">{lead.phone || lead.email || 'No contact info'}</p>
                   </td>

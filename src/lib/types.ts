@@ -35,6 +35,14 @@ export interface Lead {
   search_id: string | null;
   pipeline_stage: 'new' | 'contacted' | 'pitched' | 'booked' | 'closed' | 'lost';
   hot_list_at: string | null;
+  // Reachability — populated by /api/vet-leads. NULL means never vetted,
+  // which is deliberately not the same as "fine to message".
+  reachability_score: number | null;
+  reachability_band: string | null;
+  ig_followers: number | null;
+  ig_last_post_at: string | null;
+  ig_exists: boolean | null;
+  vetted_at: string | null;
   created_at: string;
   updated_at: string;
 }
