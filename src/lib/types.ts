@@ -43,6 +43,13 @@ export interface Lead {
   ig_last_post_at: string | null;
   ig_exists: boolean | null;
   vetted_at: string | null;
+  // Who this business is to us, and how the Instagram conversation ended.
+  // Both suppress cold outreach independently of each other.
+  relationship: string | null;
+  dm_outcome: string | null;
+  dm_opted_out: boolean | null;
+  dm_notes: string | null;
+  website_domain: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -25,7 +25,8 @@ const LEAD_FIELDS =
   'call_stage, call_outcome, call_attempts, first_call_at, last_call_at, next_call_at, ' +
   'call_draft, call_draft_updated_at, ' +
   'callback_at, call_notes, call_assigned_to, call_booked_at, do_not_call, dnc_reason, gatekeeper_name, ' +
-  'outreach_status, responded_at, ghl_contact_id, ghl_location_id, estimated_monthly_loss';
+  'outreach_status, responded_at, ghl_contact_id, ghl_location_id, estimated_monthly_loss, ' +
+  'relationship, dm_outcome, dm_opted_out, reachability_band, reachability_score';
 
 export async function POST(request: NextRequest) {
   const auth = await authOr401();
@@ -90,6 +91,10 @@ async function getPipeline(body: PipelineBody) {
 
   // Never surface a suppressed number in a calling view.
   q = q.eq('do_not_call', false);
+  // Nor anyone who isn't a cold prospect — clients, past clients, partners
+  // and competitors all live in this table too. NULL predates the column
+  // and means prospect.
+  q = q.or('relationship.eq.prospect,relationship.is.null');
 
   if (body.has_phone !== false) q = q.not('phone', 'is', null);
   if (body.stages?.length)      q = q.in('call_stage', body.stages);

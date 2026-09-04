@@ -11,6 +11,7 @@ import { computeWarmupState } from '@/lib/ig-warmup';
 import { useAuth } from '@/lib/auth-context';
 import type { Lead } from '@/lib/types';
 import { isSendable, REACH_CONFIG, type ReachBand } from '@/lib/reachability';
+import { dmSuppressed, coldOutreachAllowed, RELATIONSHIP_CONFIG, type Relationship } from '@/lib/dm-outcomes';
 
 // ═══════════════════════════════════════════════════════
 // BULK DM SEND — the "seamless" fast IG DM workflow
@@ -326,19 +327,34 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     () => leads.filter(l => leadContact(l, channel) !== null),
     [leads, channel]
   );
-  const unreachableLeads = useMemo(
-    () => contactableLeads.filter(l => !isSendable(l.reachability_band) && l.reachability_band != null && l.reachability_band !== 'unknown'),
+
+  // Hard blocks — never sent regardless of any toggle. Cold-messaging an
+  // existing client, or someone who asked us to stop, is not a tuning
+  // decision.
+  const blockedLeads = useMemo(
+    () => contactableLeads.filter(l =>
+      !coldOutreachAllowed(l.relationship) || dmSuppressed(l.dm_outcome, l.dm_opted_out)),
     [contactableLeads]
+  );
+  const clientLeads = useMemo(
+    () => blockedLeads.filter(l => !coldOutreachAllowed(l.relationship)),
+    [blockedLeads]
+  );
+  const unreachableLeads = useMemo(
+    () => contactableLeads.filter(l =>
+      !blockedLeads.includes(l) &&
+      !isSendable(l.reachability_band) && l.reachability_band != null && l.reachability_band !== 'unknown'),
+    [contactableLeads, blockedLeads]
   );
   const unvettedCount = useMemo(
     () => contactableLeads.filter(l => l.reachability_band == null).length,
     [contactableLeads]
   );
   const eligibleLeads = useMemo(
-    () => excludeUnreachable
-      ? contactableLeads.filter(l => !unreachableLeads.includes(l))
-      : contactableLeads,
-    [contactableLeads, unreachableLeads, excludeUnreachable]
+    () => contactableLeads.filter(l =>
+      !blockedLeads.includes(l) &&
+      (!excludeUnreachable || !unreachableLeads.includes(l))),
+    [contactableLeads, blockedLeads, unreachableLeads, excludeUnreachable]
   );
   const skippedNoHandle = leads.length - contactableLeads.length;
 
@@ -1156,6 +1172,32 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   </div>
                 );
               })()}
+
+              {/* Hard blocks. Shown even though they cannot be overridden —
+                  seeing "2 of these are your own clients" is the point. */}
+              {blockedLeads.length > 0 && (
+                <div className="p-3 rounded border border-prospex-red/40 bg-prospex-red/10">
+                  <p className="text-[11px] font-mono text-prospex-red mb-1">
+                    🛑 {blockedLeads.length} removed and cannot be sent
+                  </p>
+                  <div className="space-y-0.5">
+                    {clientLeads.length > 0 && (
+                      <p className="text-[10px] text-prospex-red/90">
+                        ⭐ {clientLeads.length} {clientLeads.length === 1 ? 'is' : 'are'} already {clientLeads.length === 1 ? 'a client' : 'clients'} or otherwise not a cold prospect
+                        {clientLeads.slice(0, 3).map(l => (
+                          <span key={l.id} className="block pl-4 text-prospex-dim">· {l.business_name}</span>
+                        ))}
+                        {clientLeads.length > 3 && <span className="block pl-4 text-prospex-dim">· and {clientLeads.length - 3} more</span>}
+                      </p>
+                    )}
+                    {blockedLeads.length - clientLeads.length > 0 && (
+                      <p className="text-[10px] text-prospex-red/90">
+                        🚷 {blockedLeads.length - clientLeads.length} closed off on Instagram — asked to stop, not interested, or wrong person
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Reachability gate — is anyone home on the other end.
                   Distinct from the freshness split below, which is about

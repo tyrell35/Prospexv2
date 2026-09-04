@@ -8,6 +8,7 @@ import { cn, getScoreColor, getSourceConfig, getPriorityConfig, formatDate } fro
 import type { Lead, TableSort, TableFilter } from '@/lib/types';
 import { getLeadHealth, HEALTH_CONFIG, HEALTH_ORDER, type LeadHealth } from '@/lib/lead-health';
 import { REACH_CONFIG, REACH_ORDER, type ReachBand } from '@/lib/reachability';
+import { DM_OUTCOMES, DM_OUTCOME_BY_ID, RELATIONSHIP_CONFIG, type DmOutcome, type Relationship } from '@/lib/dm-outcomes';
 import QuickMessage from '@/components/QuickMessage';
 import OutreachBlaster from '@/components/OutreachBlaster';
 import BulkDmSendModal from '@/components/BulkDmSendModal';
@@ -49,6 +50,29 @@ function ReachBadge({ band, score }: { band: string | null; score: number | null
     <span className={cn('text-[10px] font-mono px-1.5 py-0.5 rounded border inline-flex items-center gap-1',
       cfg.bgClass, cfg.textClass, cfg.borderClass)} title={cfg.hint}>
       <span>{cfg.emoji}</span>{cfg.short}{score != null ? ` ${score}` : ''}
+    </span>
+  );
+}
+
+function DmBadge({ outcome, relationship }: { outcome: string | null; relationship: string | null }) {
+  // Relationship outranks the DM outcome — "this is a client" is the more
+  // important thing to see at a glance.
+  const rel = relationship && relationship !== 'prospect'
+    ? RELATIONSHIP_CONFIG[relationship as Relationship] : null;
+  if (rel) {
+    return (
+      <span className={cn('text-[10px] font-mono px-1.5 py-0.5 rounded border border-prospex-border inline-flex items-center gap-1', rel.textClass)}
+        title={rel.hint}>
+        {rel.emoji} {rel.label}
+      </span>
+    );
+  }
+  if (!outcome) return null;
+  const cfg = DM_OUTCOME_BY_ID[outcome as DmOutcome];
+  if (!cfg) return null;
+  return (
+    <span className={cn('text-[10px] font-mono px-1.5 py-0.5 rounded border inline-flex items-center gap-1', cfg.color)} title={cfg.hint}>
+      {cfg.emoji} {cfg.label}
     </span>
   );
 }
@@ -96,6 +120,7 @@ export default function LeadsPage() {
   const [enriching, setEnriching] = useState(false);
   const [reachFilter, setReachFilter] = useState<'all' | ReachBand>('all');
   const [vetting, setVetting] = useState<null | 'score' | 'ig'>(null);
+  const [dmMarking, setDmMarking] = useState(false);
 
   // Unique values for filter dropdowns
   const [uniqueNiches, setUniqueNiches] = useState<string[]>([]);
@@ -345,6 +370,36 @@ export default function LeadsPage() {
     } finally { setVetting(null); }
   };
 
+  /** Bulk-set the Instagram disposition on the selected leads. Suppressing
+   *  outcomes also flag dm_opted_out so the queue can never resurface them. */
+  const markDmOutcome = async (outcome: DmOutcome) => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0 || dmMarking) return;
+    const cfg = DM_OUTCOME_BY_ID[outcome];
+    if (cfg.suppresses && !confirm(`Mark ${ids.length} lead${ids.length === 1 ? '' : 's'} as "${cfg.label}"?\n\n${cfg.hint}\n\nThey will be removed from the DM queue.`)) return;
+
+    setDmMarking(true);
+    try {
+      const patch: Record<string, unknown> = {
+        dm_outcome: outcome,
+        dm_outcome_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      if (outcome === 'opted_out') patch.dm_opted_out = true;
+      // "Already a client" is a statement about the relationship, not just
+      // this conversation — it must suppress the phone queue too.
+      if (outcome === 'is_client')  { patch.relationship = 'client'; patch.relationship_source = 'manual'; patch.relationship_set_at = new Date().toISOString(); }
+      if (outcome === 'competitor') { patch.relationship = 'competitor'; patch.relationship_source = 'manual'; patch.relationship_set_at = new Date().toISOString(); }
+
+      const { error } = await supabase.from('leads').update(patch).in('id', ids);
+      if (error) throw new Error(error.message);
+      setSelectedIds(new Set());
+      fetchLeads();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not set the disposition');
+    } finally { setDmMarking(false); }
+  };
+
   const totalPages = Math.ceil(totalCount / PAGE_SIZE);
   const SortIcon = ({ column }: { column: string }) => {
     if (sort.column !== column) return <ChevronUp className="w-3 h-3 text-prospex-dim opacity-0 group-hover:opacity-50" />;
@@ -475,6 +530,17 @@ export default function LeadsPage() {
               >
                 {enriching ? '⏳' : '🔬'} Enrich Devices ({selectedIds.size})
               </button>
+              <select
+                value=""
+                disabled={dmMarking}
+                onChange={e => { if (e.target.value) markDmOutcome(e.target.value as DmOutcome); e.target.value = ''; }}
+                title="Record how the Instagram conversation ended — closed-off outcomes drop out of the DM queue"
+                className="text-xs bg-prospex-bg border border-prospex-border rounded-lg px-2 py-2 text-prospex-muted hover:text-prospex-text cursor-pointer">
+                <option value="">{dmMarking ? '⏳ Saving…' : `💬 DM outcome (${selectedIds.size})`}</option>
+                {DM_OUTCOMES.map(o => (
+                  <option key={o.id} value={o.id}>{o.emoji} {o.label}{o.suppresses ? ' — stops DMs' : ''}</option>
+                ))}
+              </select>
               <button onClick={() => setBlasterChannel('whatsapp')} className="btn text-xs bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30" title="Blast WhatsApp messages"><Zap className="w-3.5 h-3.5" /> Blast WA ({selectedIds.size})</button>
               <button onClick={() => setBlasterChannel('instagram')} className="btn text-xs bg-pink-500/20 text-pink-400 border border-pink-500/30 hover:bg-pink-500/30" title="Blast Instagram DMs · confirm each send"><Zap className="w-3.5 h-3.5" /> Blast IG ({selectedIds.size})</button>
               <button onClick={() => setFastBlastChannel('instagram')} className="btn text-xs bg-gradient-to-r from-pink-500/30 to-fuchsia-500/30 text-pink-300 border border-pink-500/50 hover:from-pink-500/40 hover:to-fuchsia-500/40" title="Fast Blast IG · round-robin across warm accounts, one-tap send, keyboard shortcuts">🚀 Fast IG ({selectedIds.size})</button>
@@ -676,6 +742,7 @@ export default function LeadsPage() {
                   <div className="flex items-center gap-1.5 flex-wrap mt-2">
                     <HealthBadge health={getLeadHealth(lead, pageFetchFailedIds.has(lead.id))} />
                     <ReachBadge band={lead.reachability_band} score={lead.reachability_score} />
+                    <DmBadge outcome={lead.dm_outcome} relationship={lead.relationship} />
                     {lead.lead_priority && <PriorityBadge priority={lead.lead_priority} />}
                     {lead.lead_score !== null && <ScoreBadge score={lead.lead_score} />}
                     <SourceBadge source={lead.source} />
@@ -752,6 +819,7 @@ export default function LeadsPage() {
                       <Link href={`/leads/${lead.id}`} className="text-sm font-medium text-prospex-text hover:text-prospex-cyan transition-colors">{lead.business_name}</Link>
                       <HealthBadge health={getLeadHealth(lead, pageFetchFailedIds.has(lead.id))} />
                     <ReachBadge band={lead.reachability_band} score={lead.reachability_score} />
+                    <DmBadge outcome={lead.dm_outcome} relationship={lead.relationship} />
                     </div>
                     <p className="text-xs text-prospex-dim mt-0.5 truncate max-w-[200px]">{lead.phone || lead.email || 'No contact info'}</p>
                   </td>

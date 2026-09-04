@@ -8,6 +8,7 @@ import {
   MessageSquare, Send, Building2, Check, CloudOff, Save,
 } from 'lucide-react';
 import { cn, getScoreColor } from '@/lib/utils';
+import { supabase } from '@/lib/supabase';
 import {
   OUTCOME_GROUPS, OUTCOME_BY_ID, STAGE_BY_ID, callWindow, WINDOW_CONFIG,
   localTimeLabel, tzShort, callAge, telHref, firstNameOf,
@@ -57,6 +58,7 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
   const [accounts, setAccounts] = useState<Array<{ key: string; label: string; emoji: string; countries: string[]; configured: boolean }>>([]);
   const [smsOpen, setSmsOpen] = useState(false);
   const [smsText, setSmsText] = useState('');
+  const [bookingLink, setBookingLink] = useState('');
 
   // ── Note drafts ──────────────────────────────────────────
   // Notes used to live only in React state and were committed solely by
@@ -199,6 +201,16 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'accounts' }),
     }).then(r => r.json()).then(d => setAccounts(d.accounts || [])).catch(() => {});
+
+    // Booking URL is configured once in Settings; the console just uses it.
+    // Supabase's builder returns a PromiseLike, so this is awaited inside an
+    // async IIFE rather than chained with .catch().
+    (async () => {
+      try {
+        const { data } = await supabase.from('settings').select('calendar_url').limit(1).maybeSingle();
+        setBookingLink((data as { calendar_url?: string } | null)?.calendar_url || '');
+      } catch { /* no calendar configured yet — the button stays disabled */ }
+    })();
   }, []);
 
   const loadHistory = useCallback(async () => {
@@ -407,6 +419,13 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
     { label: 'missed', body: `${greeting}, tried you just now about ${lead.business_name}. When suits for a quick word?` },
   ];
 
+  // Two-step, because a link dropped cold reads as spam and hurts
+  // deliverability. Ask first, send once they say yes.
+  const askPermission = `${greeting}, happy to send over a 2-minute breakdown of what we'd do for ${lead.business_name} — ok to send it here?`;
+  const sendBooking = bookingLink
+    ? `${greeting}, here you go — grab whichever time suits: ${bookingLink}`
+    : '';
+
   return (
     <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-sm flex items-start md:items-center justify-center p-0 md:p-6 overflow-y-auto">
       <div className="w-full max-w-3xl bg-prospex-surface border border-prospex-border md:rounded-xl min-h-screen md:min-h-0 md:max-h-[92vh] flex flex-col">
@@ -598,6 +617,27 @@ export default function CallConsole({ queue, startIndex, onClose, onLogged }: Pr
                 <p className="text-xs text-prospex-red/90">{ghlError}</p>
               </div>
             )}
+
+            {/* They showed interest — the two taps that follow. Prefills the
+                composer rather than sending blind, so the wording can be
+                adjusted before it goes. */}
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <span className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">They're keen</span>
+              <button onClick={() => { setSmsText(askPermission); setSmsOpen(true); }}
+                title="Ask before sending a link — a cold link reads as spam and hurts deliverability"
+                className="text-[11px] font-mono px-2 py-1 rounded border bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25">
+                🙋 Ask to send info
+              </button>
+              <button onClick={() => { setSmsText(sendBooking); setSmsOpen(true); }}
+                disabled={!bookingLink}
+                title={bookingLink ? 'Send the calendar link' : 'Set a Calendar Booking URL in Settings first'}
+                className="text-[11px] font-mono px-2 py-1 rounded border bg-prospex-green/15 text-prospex-green border-prospex-green/40 hover:bg-prospex-green/25 disabled:opacity-40">
+                📅 Send booking link
+              </button>
+              {!bookingLink && (
+                <span className="text-[10px] font-mono text-prospex-dim">no calendar URL in Settings</span>
+              )}
+            </div>
 
             {smsOpen && (
               <div className="mt-3 p-3 rounded-lg bg-prospex-bg border border-prospex-border">
