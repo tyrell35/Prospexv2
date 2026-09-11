@@ -32,6 +32,7 @@ interface VoiceNote {
   video_path: string | null;
   duration_sec: number | null;
   transcript: string | null;
+  opener_text: string | null;
   pairs_with_template: string | null;
   niche: string | null;
   is_active: boolean;
@@ -194,6 +195,11 @@ export default function VoiceNotesPage() {
                       )}
                       {!n.is_active && <span className="text-[10px] font-mono text-prospex-dim">paused</span>}
                     </div>
+                    {n.opener_text && (
+                      <p className="text-[11px] text-prospex-muted mt-0.5">
+                        <span className="text-prospex-dim">opener:</span> {n.opener_text}
+                      </p>
+                    )}
                     {n.description && <p className="text-[11px] text-prospex-dim mt-0.5">{n.description}</p>}
 
                     <div className="flex items-center gap-3 mt-2 text-[10px] font-mono flex-wrap">
@@ -287,6 +293,15 @@ export default function VoiceNotesPage() {
                     {editing.audio_url ? 'Replace' : 'Upload audio'}
                   </button>
                 </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">Opener line</label>
+                <input value={editing.opener_text || ''} onChange={e => setEditing({ ...editing, opener_text: e.target.value })}
+                  placeholder="your practice is awesome ❤️" className="input mt-1" />
+                <p className="text-[10px] text-prospex-dim mt-1">
+                  Sent immediately before the video, as its own message. Kept with the recording because the two are written together.
+                </p>
               </div>
 
               <div>

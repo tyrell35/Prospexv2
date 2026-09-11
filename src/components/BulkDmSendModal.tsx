@@ -327,9 +327,17 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // from the camera roll, so a cold send uses the MP4 rendition, downloaded
   // once to the device and attached by hand. Prospex records which note went
   // with which lead so reply rate can be compared between them.
-  const [voiceNotes, setVoiceNotes] = useState<Array<{ id: string; name: string; purpose: string; video_url: string | null; audio_url: string | null; duration_sec: number | null; reply_rate: number | null; times_sent: number }>>([]);
+  const [voiceNotes, setVoiceNotes] = useState<Array<{ id: string; name: string; purpose: string; video_url: string | null; audio_url: string | null; duration_sec: number | null; reply_rate: number | null; times_sent: number; opener_text: string | null }>>([]);
+  // Hold a slice back as text-only. Sending media to a stranger is not
+  // automatically better — it can raise spam signals — and a control is the
+  // only way to know which way it goes for these accounts.
+  const [voiceHoldout, setVoiceHoldout] = useState(false);
   const [voiceNoteId, setVoiceNoteId] = useState<string>('');
   const selectedVoiceNote = voiceNotes.find(n => n.id === voiceNoteId) || null;
+  // Every 5th lead in the queue is the control when holdout is on. Index-based
+  // rather than random so the operator sees a stable instruction per lead and
+  // the split stays even.
+  const sendVoiceThisLead = !!selectedVoiceNote?.video_url && !(voiceHoldout && currentIndex % 5 === 4);
 
   const contactableLeads = useMemo(
     () => leads.filter(l => leadContact(l, channel) !== null),
@@ -772,7 +780,11 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
         if (outcome === 'sent' && voiceNoteId) {
           fetch('/api/voice-notes', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'log_sent', voice_note_id: voiceNoteId, lead_ids: [current.lead.id] }),
+            body: JSON.stringify({
+              action: 'log_sent', voice_note_id: voiceNoteId,
+              lead_ids: [current.lead.id],
+              voice_note_sent: sendVoiceThisLead,
+            }),
           }).catch(() => { /* attribution is not worth failing a send over */ });
         }
       }
@@ -1230,6 +1242,19 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                     ))}
                   </select>
 
+                  {selectedVoiceNote?.video_url && (
+                    <label className="flex items-start gap-2 cursor-pointer mt-2">
+                      <input type="checkbox" checked={voiceHoldout}
+                        onChange={e => setVoiceHoldout(e.target.checked)}
+                        className="mt-0.5 accent-[#00D4FF]" />
+                      <span className="text-[10px] text-prospex-muted leading-snug">
+                        Hold back every 5th as text-only
+                        <span className="text-prospex-dim"> — gives you a control group, so you find out whether the video
+                        lifts replies or costs them. Media on a first cold touch can cut either way.</span>
+                      </span>
+                    </label>
+                  )}
+
                   {selectedVoiceNote && (
                     <p className="text-[10px] mt-1.5 leading-snug">
                       {selectedVoiceNote.video_url ? (
@@ -1487,6 +1512,49 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
               </div>
 
               {/* Action buttons */}
+              {/* Two messages, one thread: the line, then the MP4. Spelled out
+                  per lead so the second step is not forgotten halfway through
+                  a session — a send logged as "with voice note" that never had
+                  one silently corrupts the comparison. */}
+              {isIg && selectedVoiceNote && (
+                <div className={cn('p-2.5 rounded-lg border mb-2',
+                  sendVoiceThisLead ? 'border-prospex-cyan/40 bg-prospex-cyan/5' : 'border-prospex-border bg-prospex-bg')}>
+                  {sendVoiceThisLead ? (
+                    <>
+                      <p className="text-[10px] font-mono uppercase tracking-wider text-prospex-cyan mb-1.5">
+                        Send two messages
+                      </p>
+                      <ol className="text-[11px] text-prospex-muted space-y-1">
+                        <li className="flex gap-1.5">
+                          <span className="text-prospex-dim shrink-0">1.</span>
+                          <span>Paste the message below and send.</span>
+                        </li>
+                        <li className="flex gap-1.5">
+                          <span className="text-prospex-dim shrink-0">2.</span>
+                          <span>
+                            Attach <strong className="text-prospex-text">{selectedVoiceNote.name}</strong>
+                            {selectedVoiceNote.duration_sec ? ` (${selectedVoiceNote.duration_sec}s)` : ''} from your camera roll and send.
+                          </span>
+                        </li>
+                      </ol>
+                      {selectedVoiceNote.opener_text && (
+                        <button
+                          onClick={() => navigator.clipboard.writeText(selectedVoiceNote.opener_text || '')}
+                          className="mt-2 w-full text-left text-[11px] px-2 py-1.5 rounded border border-prospex-border bg-prospex-surface text-prospex-text hover:border-prospex-cyan/40"
+                          title="Copy just the opener line">
+                          📋 {selectedVoiceNote.opener_text}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-[11px] text-amber-300">
+                      🧪 <strong>Control lead — text only.</strong> Don&apos;t attach the video on this one;
+                      it&apos;s the comparison that tells you whether the MP4 is helping.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div className="flex flex-col gap-2">
                 <button onClick={isIg && turboMode ? openAndAdvance : openInChannel}
                   disabled={isIg && sendOrder === 'grouped' && !switchAcknowledged}

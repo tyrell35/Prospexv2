@@ -90,14 +90,15 @@ export async function POST(request: NextRequest) {
       // ─── Record that a note went out with a send ───
       // Called once per lead so reply rate has a real denominator.
       case 'log_sent': {
-        const { voice_note_id, lead_ids } = body as { voice_note_id: string; lead_ids: string[] };
+        const { voice_note_id, lead_ids, voice_note_sent } = body as
+          { voice_note_id: string; lead_ids: string[]; voice_note_sent?: boolean };
         if (!voice_note_id || !Array.isArray(lead_ids) || lead_ids.length === 0) {
           return NextResponse.json({ error: 'voice_note_id and lead_ids required' }, { status: 400 });
         }
         const now = new Date().toISOString();
         for (let i = 0; i < lead_ids.length; i += 200) {
           await supabase.from('leads')
-            .update({ voice_note_id, voice_note_sent_at: now })
+            .update({ voice_note_id, voice_note_sent_at: now, voice_note_sent: voice_note_sent ?? true })
             .in('id', lead_ids.slice(i, i + 200));
         }
 
@@ -123,6 +124,44 @@ export async function POST(request: NextRequest) {
           await supabase.from('voice_notes').update({ replies: count || 0 }).eq('id', n.id);
         }
         return NextResponse.json({ success: true, refreshed: (notes || []).length });
+      }
+
+      // ─── Did the MP4 actually help? ───
+      // Compares leads that got the video against the deliberate text-only
+      // control for the same note. Without this the voice note is an
+      // assumption rather than a finding.
+      case 'lift': {
+        const { data: notes } = await supabase.from('voice_notes').select('id, name');
+        const out: Array<Record<string, unknown>> = [];
+
+        for (const n of (notes || []) as Array<{ id: string; name: string }>) {
+          const tally = async (sent: boolean) => {
+            const { count: total } = await supabase
+              .from('leads').select('id', { count: 'exact', head: true })
+              .eq('voice_note_id', n.id).eq('voice_note_sent', sent);
+            const { count: replied } = await supabase
+              .from('leads').select('id', { count: 'exact', head: true })
+              .eq('voice_note_id', n.id).eq('voice_note_sent', sent)
+              .not('responded_at', 'is', null);
+            return { total: total || 0, replied: replied || 0 };
+          };
+          const withV = await tally(true);
+          const without = await tally(false);
+          if (withV.total === 0 && without.total === 0) continue;
+
+          const rate = (t: { total: number; replied: number }) =>
+            t.total > 0 ? Math.round((t.replied / t.total) * 100) : null;
+
+          out.push({
+            id: n.id, name: n.name,
+            with_video: { ...withV, reply_rate: rate(withV) },
+            text_only: { ...without, reply_rate: rate(without) },
+            // Below ~30 sends a side, the difference is noise. Say so rather
+            // than let a 1-of-3 result read as a result.
+            conclusive: withV.total >= 30 && without.total >= 30,
+          });
+        }
+        return NextResponse.json({ success: true, lift: out });
       }
 
       default:
