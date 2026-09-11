@@ -332,6 +332,10 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // automatically better — it can raise spam signals — and a control is the
   // only way to know which way it goes for these accounts.
   const [voiceHoldout, setVoiceHoldout] = useState(false);
+  // The opener is written to go with the recording ("your practice is awesome
+  // ❤️"), so it is usually the message itself rather than a preamble to a
+  // longer script. When this is on it becomes the prefilled/copied text.
+  const [useOpenerAsMessage, setUseOpenerAsMessage] = useState(false);
   const [voiceNoteId, setVoiceNoteId] = useState<string>('');
   const selectedVoiceNote = voiceNotes.find(n => n.id === voiceNoteId) || null;
   // Every 5th lead in the queue is the control when holdout is on. Index-based
@@ -504,8 +508,13 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
     // Build the ORDERED targets list — fresh first, follow-ups after.
     // Each entry carries the template it should use so downstream code can
     // route templates correctly.
+    // A note's opener replaces the script when the operator opts in — the
+    // queue is rebuilt on send, so this is resolved once here.
+    const openerOverride = useOpenerAsMessage ? (selectedVoiceNote?.opener_text || '') : '';
+    const primaryContent = openerOverride || primaryTemplate.content;
+
     const targets: Array<{ lead: Lead; templateContent: string }> = [];
-    for (const l of freshLeads) targets.push({ lead: l, templateContent: primaryTemplate.content });
+    for (const l of freshLeads) targets.push({ lead: l, templateContent: primaryContent });
     if (followUpTemplate?.content && includeAlreadyMessaged) {
       for (const l of followUpLeads) targets.push({ lead: l, templateContent: followUpTemplate.content });
     }
@@ -1250,6 +1259,20 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                     ))}
                   </select>
 
+                  {selectedVoiceNote?.opener_text && (
+                    <label className="flex items-start gap-2 cursor-pointer mt-2">
+                      <input type="checkbox" checked={useOpenerAsMessage}
+                        onChange={e => setUseOpenerAsMessage(e.target.checked)}
+                        className="mt-0.5 accent-[#00D4FF]" />
+                      <span className="text-[10px] text-prospex-muted leading-snug">
+                        Use this note&apos;s opener as the message
+                        <span className="text-prospex-dim"> — “{selectedVoiceNote.opener_text}” replaces the template,
+                        so {isIg ? 'that is what gets copied' : 'that is what prefills'}. Leave off to keep the template
+                        and send the opener separately.</span>
+                      </span>
+                    </label>
+                  )}
+
                   {voiceFileUrl && (
                     <label className="flex items-start gap-2 cursor-pointer mt-2">
                       <input type="checkbox" checked={voiceHoldout}
@@ -1539,7 +1562,9 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                       <ol className="text-[11px] text-prospex-muted space-y-1">
                         <li className="flex gap-1.5">
                           <span className="text-prospex-dim shrink-0">1.</span>
-                          <span>Paste the message below and send.</span>
+                          <span>{isIg
+                            ? 'Paste the message below and send.'
+                            : 'The message is already prefilled — just hit send.'}</span>
                         </li>
                         <li className="flex gap-1.5">
                           <span className="text-prospex-dim shrink-0">2.</span>
@@ -1550,7 +1575,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                           </span>
                         </li>
                       </ol>
-                      {selectedVoiceNote.opener_text && (
+                      {selectedVoiceNote.opener_text && !useOpenerAsMessage && (
                         <button
                           onClick={() => navigator.clipboard.writeText(selectedVoiceNote.opener_text || '')}
                           className="mt-2 w-full text-left text-[11px] px-2 py-1.5 rounded border border-prospex-border bg-prospex-surface text-prospex-text hover:border-prospex-cyan/40"
