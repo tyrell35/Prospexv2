@@ -323,6 +323,14 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // still sent (we have no evidence against them), just flagged.
   const [excludeUnreachable, setExcludeUnreachable] = useState(true);
 
+  // Voice note for this session. Instagram will not attach a bare audio file
+  // from the camera roll, so a cold send uses the MP4 rendition, downloaded
+  // once to the device and attached by hand. Prospex records which note went
+  // with which lead so reply rate can be compared between them.
+  const [voiceNotes, setVoiceNotes] = useState<Array<{ id: string; name: string; purpose: string; video_url: string | null; audio_url: string | null; duration_sec: number | null; reply_rate: number | null; times_sent: number }>>([]);
+  const [voiceNoteId, setVoiceNoteId] = useState<string>('');
+  const selectedVoiceNote = voiceNotes.find(n => n.id === voiceNoteId) || null;
+
   const contactableLeads = useMemo(
     () => leads.filter(l => leadContact(l, channel) !== null),
     [leads, channel]
@@ -363,6 +371,18 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // If yes, it's "already messaged" — auto-excluded from the fresh-cold
   // queue unless the operator opts in to follow-up mode. Runs once per
   // modal open (or when the lead set changes).
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch('/api/voice-notes', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'list' }),
+    })
+      .then(r => r.json())
+      .then(d => setVoiceNotes((d.notes || []).filter((n: { is_active: boolean; purpose: string }) =>
+        n.is_active && (n.purpose === 'cold_open' || n.purpose === 'follow_up'))))
+      .catch(() => {});
+  }, [isOpen]);
+
   useEffect(() => {
     if (!isOpen || eligibleLeads.length === 0) return;
     let cancelled = false;
@@ -746,6 +766,15 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'Log failed');
+
+        // Attribute the send to the voice note that went with it, so reply
+        // rate per recording has a real denominator.
+        if (outcome === 'sent' && voiceNoteId) {
+          fetch('/api/voice-notes', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'log_sent', voice_note_id: voiceNoteId, lead_ids: [current.lead.id] }),
+          }).catch(() => { /* attribution is not worth failing a send over */ });
+        }
       }
 
       // WA-only: reset the pacing timer so the UI can nudge the user
@@ -1172,6 +1201,52 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   </div>
                 );
               })()}
+
+              {/* Voice note for this session. Downloaded once, attached by
+                  hand on each send — Instagram has no API path for a cold DM. */}
+              {voiceNotes.length > 0 && (
+                <div className={cn('p-3 rounded border',
+                  voiceNoteId ? 'border-prospex-cyan/30 bg-prospex-cyan/5' : 'border-prospex-border bg-prospex-bg')}>
+                  <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
+                    <p className="text-[11px] font-mono text-prospex-text">🎙️ Voice note</p>
+                    {selectedVoiceNote?.video_url && (
+                      <a href={selectedVoiceNote.video_url} download
+                        className="text-[10px] font-mono px-2 py-0.5 rounded border border-prospex-cyan/40 text-prospex-cyan hover:bg-prospex-cyan/10">
+                        ⬇ Save MP4 to this device
+                      </a>
+                    )}
+                  </div>
+
+                  <select value={voiceNoteId} onChange={e => setVoiceNoteId(e.target.value)}
+                    className="input text-xs">
+                    <option value="">No voice note — text only</option>
+                    {voiceNotes.map(n => (
+                      <option key={n.id} value={n.id}>
+                        {n.name}
+                        {n.duration_sec ? ` · ${n.duration_sec}s` : ''}
+                        {n.reply_rate != null ? ` · ${n.reply_rate}% replied` : ''}
+                        {!n.video_url ? ' — no MP4' : ''}
+                      </option>
+                    ))}
+                  </select>
+
+                  {selectedVoiceNote && (
+                    <p className="text-[10px] mt-1.5 leading-snug">
+                      {selectedVoiceNote.video_url ? (
+                        <span className="text-prospex-muted">
+                          Save it once, then attach it from your camera roll after pasting each message.
+                          Every send gets tagged with this note so you can compare reply rates later.
+                        </span>
+                      ) : (
+                        <span className="text-amber-300">
+                          This note has no MP4, so Instagram can&apos;t attach it. Upload one on the Voice Notes page —
+                          a bare audio file won&apos;t send from the camera roll.
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Hard blocks. Shown even though they cannot be overridden —
                   seeing "2 of these are your own clients" is the point. */}

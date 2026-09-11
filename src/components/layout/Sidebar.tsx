@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Send, Shield, Settings, Menu, X, LogOut, PhoneCall, Rocket, Clock, Target, Trophy, Flame, Microscope } from 'lucide-react';
+import { Crosshair, Search, Camera, Database, History, GraduationCap, MessageCircle, Bot, Users, Mail, Inbox, BarChart3, Send, Shield, Settings, Menu, X, LogOut, PhoneCall, Mic, Rocket, Clock, Target, Trophy, Flame, Microscope } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth-context';
 
@@ -23,6 +23,7 @@ const navigation = [
   { name: 'Scorecard', href: '/outreach-scorecard', icon: Trophy },
   { name: 'Follow-Ups', href: '/follow-ups', icon: Clock },
   { name: 'DM Campaigns', href: '/dm-campaigns', icon: Rocket },
+  { name: '🎙️ Voice Notes', href: '/voice-notes', icon: Mic },
   { name: 'Outreach Coach', href: '/outreach-coach', icon: GraduationCap },
   { name: 'Conversations', href: '/conversations', icon: MessageCircle },
   { name: 'AI Agent', href: '/ai-agent', icon: Bot },
