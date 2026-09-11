@@ -21,9 +21,10 @@ export async function POST(request: NextRequest) {
 
     switch (body.action) {
       case 'list': {
-        const { data, error } = await supabase
-          .from('voice_notes')
-          .select('*')
+        let q = supabase.from('voice_notes').select('*');
+        // The send flows ask for their own channel only.
+        if (body.channel) q = q.contains('channels', [body.channel]);
+        const { data, error } = await q
           .order('is_active', { ascending: false })
           .order('created_at', { ascending: false });
         if (error) throw new Error(error.message);
@@ -50,6 +51,13 @@ export async function POST(request: NextRequest) {
           video_url: fields.video_url || null,
           audio_path: fields.audio_path || null,
           video_path: fields.video_path || null,
+          ogg_url: fields.ogg_url || null,
+          ogg_path: fields.ogg_path || null,
+          audio_bytes: fields.audio_bytes ?? null,
+          video_bytes: fields.video_bytes ?? null,
+          channels: Array.isArray(fields.channels) && fields.channels.length > 0
+            ? fields.channels : ['instagram', 'whatsapp'],
+          opener_text: fields.opener_text || null,
           duration_sec: fields.duration_sec ?? null,
           transcript: fields.transcript || null,
           pairs_with_template: fields.pairs_with_template || null,
@@ -75,10 +83,11 @@ export async function POST(request: NextRequest) {
       case 'delete': {
         if (!body.id) return NextResponse.json({ error: 'id required' }, { status: 400 });
         const { data: note } = await supabase
-          .from('voice_notes').select('audio_path, video_path').eq('id', body.id).maybeSingle();
+          .from('voice_notes').select('audio_path, video_path, ogg_path').eq('id', body.id).maybeSingle();
         const paths = [
           (note as { audio_path?: string } | null)?.audio_path,
           (note as { video_path?: string } | null)?.video_path,
+          (note as { ogg_path?: string } | null)?.ogg_path,
         ].filter((p): p is string => !!p);
         if (paths.length > 0) await supabase.storage.from('voice-notes').remove(paths);
 

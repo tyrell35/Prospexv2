@@ -327,7 +327,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // from the camera roll, so a cold send uses the MP4 rendition, downloaded
   // once to the device and attached by hand. Prospex records which note went
   // with which lead so reply rate can be compared between them.
-  const [voiceNotes, setVoiceNotes] = useState<Array<{ id: string; name: string; purpose: string; video_url: string | null; audio_url: string | null; duration_sec: number | null; reply_rate: number | null; times_sent: number; opener_text: string | null }>>([]);
+  const [voiceNotes, setVoiceNotes] = useState<Array<{ id: string; name: string; purpose: string; video_url: string | null; audio_url: string | null; ogg_url: string | null; duration_sec: number | null; reply_rate: number | null; times_sent: number; opener_text: string | null }>>([]);
   // Hold a slice back as text-only. Sending media to a stranger is not
   // automatically better — it can raise spam signals — and a control is the
   // only way to know which way it goes for these accounts.
@@ -337,7 +337,13 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // Every 5th lead in the queue is the control when holdout is on. Index-based
   // rather than random so the operator sees a stable instruction per lead and
   // the split stays even.
-  const sendVoiceThisLead = !!selectedVoiceNote?.video_url && !(voiceHoldout && currentIndex % 5 === 4);
+  // Instagram can only attach the video. WhatsApp accepts the audio file
+  // directly, so an MP3-only note is still usable there.
+  const voiceFileUrl = isIg
+    ? selectedVoiceNote?.video_url || null
+    : selectedVoiceNote?.ogg_url || selectedVoiceNote?.audio_url || selectedVoiceNote?.video_url || null;
+  const voiceFileLabel = isIg ? 'MP4' : selectedVoiceNote?.ogg_url ? '.ogg voice note' : selectedVoiceNote?.audio_url ? 'MP3' : 'MP4';
+  const sendVoiceThisLead = !!voiceFileUrl && !(voiceHoldout && currentIndex % 5 === 4);
 
   const contactableLeads = useMemo(
     () => leads.filter(l => leadContact(l, channel) !== null),
@@ -381,15 +387,16 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // modal open (or when the lead set changes).
   useEffect(() => {
     if (!isOpen) return;
+    setVoiceNoteId('');
     fetch('/api/voice-notes', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'list' }),
+      body: JSON.stringify({ action: 'list', channel }),
     })
       .then(r => r.json())
       .then(d => setVoiceNotes((d.notes || []).filter((n: { is_active: boolean; purpose: string }) =>
         n.is_active && (n.purpose === 'cold_open' || n.purpose === 'follow_up'))))
       .catch(() => {});
-  }, [isOpen]);
+  }, [isOpen, channel]);
 
   useEffect(() => {
     if (!isOpen || eligibleLeads.length === 0) return;
@@ -1221,10 +1228,10 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   voiceNoteId ? 'border-prospex-cyan/30 bg-prospex-cyan/5' : 'border-prospex-border bg-prospex-bg')}>
                   <div className="flex items-center justify-between gap-2 mb-1.5 flex-wrap">
                     <p className="text-[11px] font-mono text-prospex-text">🎙️ Voice note</p>
-                    {selectedVoiceNote?.video_url && (
-                      <a href={selectedVoiceNote.video_url} download
+                    {voiceFileUrl && (
+                      <a href={voiceFileUrl} download
                         className="text-[10px] font-mono px-2 py-0.5 rounded border border-prospex-cyan/40 text-prospex-cyan hover:bg-prospex-cyan/10">
-                        ⬇ Save MP4 to this device
+                        ⬇ Save {voiceFileLabel} to this device
                       </a>
                     )}
                   </div>
@@ -1237,12 +1244,13 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                         {n.name}
                         {n.duration_sec ? ` · ${n.duration_sec}s` : ''}
                         {n.reply_rate != null ? ` · ${n.reply_rate}% replied` : ''}
-                        {!n.video_url ? ' — no MP4' : ''}
+                        {isIg && !n.video_url ? ' — no MP4' : ''}
+                        {!isIg && !n.audio_url && !n.ogg_url && !n.video_url ? ' — no file' : ''}
                       </option>
                     ))}
                   </select>
 
-                  {selectedVoiceNote?.video_url && (
+                  {voiceFileUrl && (
                     <label className="flex items-start gap-2 cursor-pointer mt-2">
                       <input type="checkbox" checked={voiceHoldout}
                         onChange={e => setVoiceHoldout(e.target.checked)}
@@ -1257,15 +1265,19 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
 
                   {selectedVoiceNote && (
                     <p className="text-[10px] mt-1.5 leading-snug">
-                      {selectedVoiceNote.video_url ? (
+                      {voiceFileUrl ? (
                         <span className="text-prospex-muted">
-                          Save it once, then attach it from your camera roll after pasting each message.
+                          Save it once, then attach it {isIg ? 'from your camera roll' : 'from Files'} after pasting each message.
                           Every send gets tagged with this note so you can compare reply rates later.
+                        </span>
+                      ) : isIg ? (
+                        <span className="text-amber-300">
+                          No MP4 on this note, so Instagram can&apos;t attach it — a bare audio file won&apos;t send from the
+                          camera roll. Upload one on the Voice Notes page.
                         </span>
                       ) : (
                         <span className="text-amber-300">
-                          This note has no MP4, so Instagram can&apos;t attach it. Upload one on the Voice Notes page —
-                          a bare audio file won&apos;t send from the camera roll.
+                          No audio or video on this note. WhatsApp will take an MP3 directly — upload one on the Voice Notes page.
                         </span>
                       )}
                     </p>
@@ -1516,7 +1528,7 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                   per lead so the second step is not forgotten halfway through
                   a session — a send logged as "with voice note" that never had
                   one silently corrupts the comparison. */}
-              {isIg && selectedVoiceNote && (
+              {selectedVoiceNote && (
                 <div className={cn('p-2.5 rounded-lg border mb-2',
                   sendVoiceThisLead ? 'border-prospex-cyan/40 bg-prospex-cyan/5' : 'border-prospex-border bg-prospex-bg')}>
                   {sendVoiceThisLead ? (
@@ -1533,7 +1545,8 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                           <span className="text-prospex-dim shrink-0">2.</span>
                           <span>
                             Attach <strong className="text-prospex-text">{selectedVoiceNote.name}</strong>
-                            {selectedVoiceNote.duration_sec ? ` (${selectedVoiceNote.duration_sec}s)` : ''} from your camera roll and send.
+                            {selectedVoiceNote.duration_sec ? ` (${selectedVoiceNote.duration_sec}s)` : ''}
+                            {' '}({voiceFileLabel}) from {isIg ? 'your camera roll' : 'Files'} and send.
                           </span>
                         </li>
                       </ol>
@@ -1548,8 +1561,8 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                     </>
                   ) : (
                     <p className="text-[11px] text-amber-300">
-                      🧪 <strong>Control lead — text only.</strong> Don&apos;t attach the video on this one;
-                      it&apos;s the comparison that tells you whether the MP4 is helping.
+                      🧪 <strong>Control lead — text only.</strong> Don&apos;t attach anything on this one;
+                      it&apos;s the comparison that tells you whether the voice note is helping.
                     </p>
                   )}
                 </div>

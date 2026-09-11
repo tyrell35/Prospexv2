@@ -33,6 +33,11 @@ interface VoiceNote {
   duration_sec: number | null;
   transcript: string | null;
   opener_text: string | null;
+  channels: string[] | null;
+  ogg_url: string | null;
+  ogg_path: string | null;
+  video_bytes: number | null;
+  audio_bytes: number | null;
   pairs_with_template: string | null;
   niche: string | null;
   is_active: boolean;
@@ -40,6 +45,18 @@ interface VoiceNote {
   replies: number;
   reply_rate: number | null;
 }
+
+const CHANNELS = [
+  { id: 'instagram', label: 'Instagram', emoji: '📸' },
+  { id: 'whatsapp',  label: 'WhatsApp',  emoji: '💬' },
+];
+
+// WhatsApp template video headers cap at 16MB — below Instagram's 25MB, so
+// a file that is fine on one can fail on the other.
+const WA_VIDEO_LIMIT = 16 * 1024 * 1024;
+const IG_LIMIT = 25 * 1024 * 1024;
+
+const fmtMb = (b: number | null | undefined) => b ? `${(b / 1024 / 1024).toFixed(1)}MB` : null;
 
 const PURPOSES = [
   { id: 'cold_open',  label: 'Cold open',      emoji: '👋', hint: 'First touch. Needs the MP4 — this one is sent by hand.' },
@@ -57,6 +74,7 @@ export default function VoiceNotesPage() {
   const [saving, setSaving] = useState(false);
   const audioInput = useRef<HTMLInputElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
+  const oggInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -73,10 +91,10 @@ export default function VoiceNotesPage() {
   useEffect(() => { load(); }, [load]);
 
   /** Straight to Supabase Storage — the API route only holds metadata. */
-  const upload = async (file: File, kind: 'audio' | 'video') => {
+  const upload = async (file: File, kind: 'audio' | 'video' | 'ogg') => {
     setUploading(kind);
     try {
-      const ext = file.name.split('.').pop() || (kind === 'audio' ? 'm4a' : 'mp4');
+      const ext = file.name.split('.').pop() || (kind === 'audio' ? 'mp3' : kind === 'ogg' ? 'ogg' : 'mp4');
       const path = `${kind}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
       const { error } = await supabase.storage.from('voice-notes')
         .upload(path, file, { cacheControl: '3600', upsert: false });
@@ -87,6 +105,8 @@ export default function VoiceNotesPage() {
         ...prev,
         [`${kind}_url`]: pub.publicUrl,
         [`${kind}_path`]: path,
+        ...(kind === 'video' ? { video_bytes: file.size } : {}),
+        ...(kind === 'audio' ? { audio_bytes: file.size } : {}),
         name: prev?.name || file.name.replace(/\.[^.]+$/, ''),
       }));
     } catch (e) {
@@ -147,20 +167,27 @@ export default function VoiceNotesPage() {
         </div>
       </div>
 
-      {/* The platform constraint, stated once where it matters. */}
+      {/* The platform rules, stated once where they matter. They differ
+          between the two channels in ways that decide what you upload. */}
       <div className="card p-3 border-amber-500/30 bg-amber-500/5">
         <p className="text-xs text-amber-300 font-mono mb-1.5 inline-flex items-center gap-1.5">
-          <AlertTriangle className="w-3.5 h-3.5" />How Instagram actually handles these
+          <AlertTriangle className="w-3.5 h-3.5" />What each platform will actually accept
         </p>
-        <div className="text-[11px] text-prospex-muted space-y-1 leading-relaxed">
+        <div className="text-[11px] text-prospex-muted space-y-1.5 leading-relaxed">
           <p>
-            <strong className="text-prospex-text">Cold DMs — MP4, sent by hand.</strong> Instagram won&apos;t attach a bare audio
-            file from your camera roll, and its API cannot start a conversation at all. A video attaches in one tap, so upload
-            an MP4 version for anything you send cold.
+            <strong className="text-prospex-text">📸 Instagram — MP4 only.</strong> It won&apos;t attach a bare audio file
+            from your camera roll, so anything sent cold has to be the video. Its API can&apos;t start a
+            conversation at all; audio only becomes sendable in the 24 hours after a lead replies.
           </p>
           <p>
-            <strong className="text-prospex-text">After they reply — audio, sendable automatically.</strong> Once a lead
-            messages you, a 24-hour window opens where the API can send a real audio attachment (aac, m4a, wav or mp4, under 25MB).
+            <strong className="text-prospex-text">💬 WhatsApp — MP3 works.</strong> It does accept an audio file from
+            the file picker, so the MP3 sends by hand with no video workaround. For the waveform
+            press-to-play kind, it has to be <strong>.ogg/OPUS</strong> — an MP3 arrives as a playable
+            attachment instead. Both fine, they just look different.
+          </p>
+          <p className="text-prospex-dim">
+            Size: Instagram 25MB. WhatsApp template video 16MB, H.264 + AAC — the tighter of the two, so
+            keep the MP4 under 16MB and it passes everywhere.
           </p>
         </div>
       </div>
@@ -174,7 +201,7 @@ export default function VoiceNotesPage() {
           <Mic className="w-8 h-8 text-prospex-dim mx-auto mb-3" />
           <p className="text-sm text-prospex-muted">No voice notes yet.</p>
           <p className="text-xs text-prospex-dim mt-1">
-            When you get them made, ask for both an <strong>.m4a</strong> and an <strong>.mp4</strong> of each — that covers both send routes.
+            When you get them made, ask for an <strong>.mp4</strong> and an <strong>.mp3</strong> of each — that covers Instagram and WhatsApp.
           </p>
         </div>
       ) : (
@@ -203,13 +230,23 @@ export default function VoiceNotesPage() {
                     {n.description && <p className="text-[11px] text-prospex-dim mt-0.5">{n.description}</p>}
 
                     <div className="flex items-center gap-3 mt-2 text-[10px] font-mono flex-wrap">
-                      <span className={n.video_url ? 'text-prospex-green' : 'text-amber-300'}>
-                        {n.video_url ? <CheckCircle2 className="w-3 h-3 inline" /> : <AlertTriangle className="w-3 h-3 inline" />}
-                        {' '}MP4 {n.video_url ? 'ready' : 'missing — cold sends need this'}
+                      <span className={n.video_url ? 'text-prospex-green' : (n.channels || []).includes('instagram') ? 'text-amber-300' : 'text-prospex-dim'}>
+                        {n.video_url ? <CheckCircle2 className="w-3 h-3 inline" /> : (n.channels || []).includes('instagram') ? <AlertTriangle className="w-3 h-3 inline" /> : '○'}
+                        {' '}MP4 {n.video_url ? 'ready' : (n.channels || []).includes('instagram') ? 'missing — Instagram needs this' : 'not uploaded'}
                       </span>
                       <span className={n.audio_url ? 'text-prospex-green' : 'text-prospex-dim'}>
-                        {n.audio_url ? <CheckCircle2 className="w-3 h-3 inline" /> : '○'} audio {n.audio_url ? 'ready' : 'not uploaded'}
+                        {n.audio_url ? <CheckCircle2 className="w-3 h-3 inline" /> : '○'} MP3 {n.audio_url ? 'ready' : 'not uploaded'}
                       </span>
+                      {n.ogg_url && <span className="text-prospex-green"><CheckCircle2 className="w-3 h-3 inline" /> .ogg</span>}
+                      {(n.channels || []).map(c => {
+                        const ch = CHANNELS.find(x => x.id === c);
+                        return ch ? <span key={c} className="text-prospex-dim">{ch.emoji}</span> : null;
+                      })}
+                      {n.video_bytes && n.video_bytes > WA_VIDEO_LIMIT && (n.channels || []).includes('whatsapp') && (
+                        <span className="text-amber-300" title="Over WhatsApp's 16MB template video limit">
+                          ⚠ {fmtMb(n.video_bytes)} — too big for WhatsApp
+                        </span>
+                      )}
                       <span className="text-prospex-muted">
                         sent {n.times_sent}
                         {n.reply_rate != null && <span className={cn('ml-1 font-bold', n.reply_rate >= 10 ? 'text-prospex-green' : 'text-prospex-muted')}>
@@ -272,28 +309,75 @@ export default function VoiceNotesPage() {
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">Use on</label>
+                <div className="flex gap-1.5 mt-1">
+                  {CHANNELS.map(c => {
+                    const on = (editing.channels || ['instagram', 'whatsapp']).includes(c.id);
+                    return (
+                      <button key={c.id}
+                        onClick={() => {
+                          const cur = editing.channels || ['instagram', 'whatsapp'];
+                          setEditing({ ...editing, channels: on ? cur.filter(x => x !== c.id) : [...cur, c.id] });
+                        }}
+                        className={cn('text-xs font-mono px-3 py-1.5 rounded-lg border flex-1',
+                          on ? 'bg-prospex-cyan/15 text-prospex-cyan border-prospex-cyan/40'
+                             : 'bg-prospex-bg text-prospex-dim border-prospex-border')}>
+                        {c.emoji} {c.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <div>
-                  <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">MP4 (cold sends)</label>
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">MP4</label>
                   <input ref={videoInput} type="file" accept="video/mp4,video/quicktime" className="hidden"
                     onChange={e => { const f = e.target.files?.[0]; if (f) upload(f, 'video'); }} />
                   <button onClick={() => videoInput.current?.click()} disabled={!!uploading}
                     className={cn('btn-ghost text-xs w-full mt-1 border', editing.video_url ? 'border-prospex-green/40 text-prospex-green' : 'border-prospex-border')}>
                     {uploading === 'video' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Video className="w-3.5 h-3.5" />}
-                    {editing.video_url ? 'Replace' : 'Upload MP4'}
+                    {editing.video_url ? 'Replace' : 'Upload'}
                   </button>
+                  <p className="text-[9px] text-prospex-dim mt-1">Required for Instagram</p>
                 </div>
                 <div>
-                  <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">Audio (after reply)</label>
-                  <input ref={audioInput} type="file" accept="audio/*" className="hidden"
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">MP3</label>
+                  <input ref={audioInput} type="file" accept="audio/mpeg,audio/mp4,audio/aac,audio/wav,audio/x-m4a" className="hidden"
                     onChange={e => { const f = e.target.files?.[0]; if (f) upload(f, 'audio'); }} />
                   <button onClick={() => audioInput.current?.click()} disabled={!!uploading}
                     className={cn('btn-ghost text-xs w-full mt-1 border', editing.audio_url ? 'border-prospex-green/40 text-prospex-green' : 'border-prospex-border')}>
                     {uploading === 'audio' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileAudio className="w-3.5 h-3.5" />}
-                    {editing.audio_url ? 'Replace' : 'Upload audio'}
+                    {editing.audio_url ? 'Replace' : 'Upload'}
                   </button>
+                  <p className="text-[9px] text-prospex-dim mt-1">WhatsApp sends this by hand</p>
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">.ogg</label>
+                  <input ref={oggInput} type="file" accept="audio/ogg,.ogg" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; if (f) upload(f, 'ogg'); }} />
+                  <button onClick={() => oggInput.current?.click()} disabled={!!uploading}
+                    className={cn('btn-ghost text-xs w-full mt-1 border', editing.ogg_url ? 'border-prospex-green/40 text-prospex-green' : 'border-prospex-border')}>
+                    {uploading === 'ogg' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mic className="w-3.5 h-3.5" />}
+                    {editing.ogg_url ? 'Replace' : 'Upload'}
+                  </button>
+                  <p className="text-[9px] text-prospex-dim mt-1">Optional — true WhatsApp voice note</p>
                 </div>
               </div>
+
+              {editing.video_bytes != null && (
+                <p className={cn('text-[10px] font-mono',
+                  editing.video_bytes > WA_VIDEO_LIMIT ? 'text-amber-300'
+                  : editing.video_bytes > IG_LIMIT ? 'text-prospex-red' : 'text-prospex-dim')}>
+                  MP4 is {fmtMb(editing.video_bytes)}
+                  {editing.video_bytes > IG_LIMIT
+                    ? ' — over Instagram\u2019s 25MB limit, it will not send'
+                    : editing.video_bytes > WA_VIDEO_LIMIT
+                      ? ' — over WhatsApp\u2019s 16MB template limit; fine for Instagram'
+                      : ' — within both limits'}
+                </p>
+              )}
 
               <div>
                 <label className="text-[10px] font-mono uppercase tracking-wider text-prospex-dim">Opener line</label>
