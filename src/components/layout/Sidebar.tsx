@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth-context';
 
 const navigation = [
+  { name: '🎯 Daily', href: '/daily', icon: Target },
   { name: '🔥 Hot List', href: '/hotlist', icon: Flame },
   { name: '🔬 Prospect Sweep', href: '/prospect-sweep', icon: Microscope },
   { name: 'Lead Scraping', href: '/city-scraper', icon: Search },

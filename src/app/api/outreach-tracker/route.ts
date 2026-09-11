@@ -99,6 +99,12 @@ async function logOutreach(body: Record<string, unknown>) {
     updateData.first_outreach_at = now;
   }
 
+  // Queue this send for a reply check. Without it, a message goes out and
+  // nothing ever asks what came back — which is how 359 leads ended up
+  // stuck in 'dm_sent' for four months.
+  updateData.dm_review_due = new Date(Date.now() + 48 * 3600_000).toISOString();
+  updateData.dm_reviewed_at = null;
+
   if (message_sent) {
     updateData.outreach_dm_text = message_sent;
   }
