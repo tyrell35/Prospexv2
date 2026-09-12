@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import {
   X, Instagram, MessageCircle, ExternalLink, Check, SkipForward, Ban, Loader2, ChevronLeft, ChevronRight,
-  Sparkles, AlertCircle, Flame, Copy, Rocket, User, MapPin, Trophy, Clock, Phone,
+  Sparkles, AlertCircle, Flame, Copy, Rocket, User, MapPin, Trophy, Clock, Phone, Share2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
@@ -12,6 +12,7 @@ import { useAuth } from '@/lib/auth-context';
 import type { Lead } from '@/lib/types';
 import { isSendable, REACH_CONFIG, type ReachBand } from '@/lib/reachability';
 import { dmSuppressed, coldOutreachAllowed, RELATIONSHIP_CONFIG, type Relationship } from '@/lib/dm-outcomes';
+import { shareStoredFile, canShareFiles } from '@/lib/share-file';
 
 // ═══════════════════════════════════════════════════════
 // BULK DM SEND — the "seamless" fast IG DM workflow
@@ -336,6 +337,8 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // ❤️"), so it is usually the message itself rather than a preamble to a
   // longer script. When this is on it becomes the prefilled/copied text.
   const [useOpenerAsMessage, setUseOpenerAsMessage] = useState(false);
+  const [canShare, setCanShare] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [voiceNoteId, setVoiceNoteId] = useState<string>('');
   const selectedVoiceNote = voiceNotes.find(n => n.id === voiceNoteId) || null;
   // Every 5th lead in the queue is the control when holdout is on. Index-based
@@ -389,6 +392,8 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
   // If yes, it's "already messaged" — auto-excluded from the fresh-cold
   // queue unless the operator opts in to follow-up mode. Runs once per
   // modal open (or when the lead set changes).
+  useEffect(() => { setCanShare(canShareFiles()); }, []);
+
   useEffect(() => {
     if (!isOpen) return;
     setVoiceNoteId('');
@@ -669,6 +674,27 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch { /* clipboard blocked without gesture — non-fatal */ }
+  };
+
+  /** Hand the stored file straight to Instagram/WhatsApp via the OS share
+   *  sheet, so it never has to be found in the camera roll. */
+  const shareVoiceFile = async () => {
+    if (!voiceFileUrl || sharing) return;
+    setSharing(true);
+    try {
+      const outcome = await shareStoredFile(voiceFileUrl, {
+        suggestedName: `${(selectedVoiceNote?.name || 'voice-note').replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`,
+        text: current?.message,
+        title: selectedVoiceNote?.name,
+      });
+      if (outcome === 'unsupported') {
+        setError('This browser can\u2019t hand files to other apps — use the download button instead. Sharing works on iOS Safari and Android Chrome.');
+      } else if (outcome === 'failed') {
+        setError('Could not load that file to share. Try the download button.');
+      }
+    } finally {
+      setSharing(false);
+    }
   };
 
   const openInChannel = async () => {
@@ -1239,8 +1265,11 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                     <p className="text-[11px] font-mono text-prospex-text">🎙️ Voice note</p>
                     {voiceFileUrl && (
                       <a href={voiceFileUrl} download
-                        className="text-[10px] font-mono px-2 py-0.5 rounded border border-prospex-cyan/40 text-prospex-cyan hover:bg-prospex-cyan/10">
-                        ⬇ Save {voiceFileLabel} to this device
+                        className="text-[10px] font-mono px-2 py-0.5 rounded border border-prospex-border text-prospex-dim hover:text-prospex-cyan hover:border-prospex-cyan/40"
+                        title={canShare
+                          ? 'Not needed on this device — you can send the file straight from each lead'
+                          : 'Save once, then attach it on each send'}>
+                        ⬇ Save {voiceFileLabel}
                       </a>
                     )}
                   </div>
@@ -1290,8 +1319,10 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                     <p className="text-[10px] mt-1.5 leading-snug">
                       {voiceFileUrl ? (
                         <span className="text-prospex-muted">
-                          Save it once, then attach it {isIg ? 'from your camera roll' : 'from Files'} after pasting each message.
-                          Every send gets tagged with this note so you can compare reply rates later.
+                          {canShare
+                            ? `Stored in Prospex — each lead gets a one-tap button that hands the file straight to ${isIg ? 'Instagram' : 'WhatsApp'}.`
+                            : `Save it once, then attach it ${isIg ? 'from your camera roll' : 'from Files'} after pasting each message. On a phone you get a one-tap send instead.`}
+                          {' '}Every send is tagged with this note so reply rates can be compared.
                         </span>
                       ) : isIg ? (
                         <span className="text-amber-300">
@@ -1569,12 +1600,23 @@ export default function BulkDmSendModal({ isOpen, onClose, leads, channel, onCom
                         <li className="flex gap-1.5">
                           <span className="text-prospex-dim shrink-0">2.</span>
                           <span>
-                            Attach <strong className="text-prospex-text">{selectedVoiceNote.name}</strong>
-                            {selectedVoiceNote.duration_sec ? ` (${selectedVoiceNote.duration_sec}s)` : ''}
-                            {' '}({voiceFileLabel}) from {isIg ? 'your camera roll' : 'Files'} and send.
+                            {canShare ? <>Send <strong className="text-prospex-text">{selectedVoiceNote.name}</strong> with the button below.</>
+                              : <>Attach <strong className="text-prospex-text">{selectedVoiceNote.name}</strong>
+                                {selectedVoiceNote.duration_sec ? ` (${selectedVoiceNote.duration_sec}s)` : ''}
+                                {' '}({voiceFileLabel}) from {isIg ? 'your camera roll' : 'Files'} and send.</>}
                           </span>
                         </li>
                       </ol>
+
+                      {/* On mobile the file can go straight to the app through
+                          the OS share sheet — no camera-roll hunting. */}
+                      {canShare && voiceFileUrl && (
+                        <button onClick={shareVoiceFile} disabled={sharing}
+                          className="w-full mt-2 flex items-center justify-center gap-2 py-2 rounded-lg border border-prospex-cyan/50 bg-prospex-cyan/15 text-prospex-cyan font-mono text-xs disabled:opacity-50">
+                          {sharing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
+                          {sharing ? 'Loading file…' : `Send ${voiceFileLabel} to ${isIg ? 'Instagram' : 'WhatsApp'}`}
+                        </button>
+                      )}
                       {selectedVoiceNote.opener_text && !useOpenerAsMessage && (
                         <button
                           onClick={() => navigator.clipboard.writeText(selectedVoiceNote.opener_text || '')}

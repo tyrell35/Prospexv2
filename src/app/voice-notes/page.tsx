@@ -3,10 +3,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Mic, Upload, Trash2, Loader2, RefreshCw, Play, Download,
-  AlertTriangle, CheckCircle2, Video, FileAudio, Pencil, X,
+  AlertTriangle, CheckCircle2, Video, FileAudio, Pencil, X, Share2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
+import { shareStoredFile, canShareFiles } from '@/lib/share-file';
 
 // ═══════════════════════════════════════════════════════════════
 // VOICE NOTES
@@ -75,6 +76,8 @@ export default function VoiceNotesPage() {
   const audioInput = useRef<HTMLInputElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
   const oggInput = useRef<HTMLInputElement>(null);
+  const [canShare, setCanShare] = useState(false);
+  const [sharingId, setSharingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -89,6 +92,21 @@ export default function VoiceNotesPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setCanShare(canShareFiles()); }, []);
+
+  /** Hand a stored file straight to another app via the OS share sheet. */
+  const share = async (n: VoiceNote, url: string) => {
+    setSharingId(n.id);
+    try {
+      const outcome = await shareStoredFile(url, {
+        suggestedName: n.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase(),
+        text: n.opener_text || undefined,
+        title: n.name,
+      });
+      if (outcome === 'unsupported') alert('This browser can\u2019t hand files to other apps. Use Download instead — sharing works on iOS Safari and Android Chrome.');
+      if (outcome === 'failed') alert('Could not load that file to share.');
+    } finally { setSharingId(null); }
+  };
 
   /** Straight to Supabase Storage — the API route only holds metadata. */
   const upload = async (file: File, kind: 'audio' | 'video' | 'ogg') => {
@@ -257,9 +275,23 @@ export default function VoiceNotesPage() {
                   </div>
 
                   <div className="flex items-center gap-1 shrink-0">
+                    {canShare && (n.video_url || n.audio_url) && (
+                      <button onClick={() => share(n, n.video_url || n.audio_url || '')}
+                        disabled={sharingId === n.id}
+                        className="btn-ghost text-xs border border-prospex-cyan/40 text-prospex-cyan disabled:opacity-50"
+                        title="Hand the file straight to Instagram or WhatsApp">
+                        {sharingId === n.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Share2 className="w-3.5 h-3.5" />}
+                        Send
+                      </button>
+                    )}
                     {n.video_url && (
-                      <a href={n.video_url} download className="btn-ghost text-xs border border-prospex-border" title="Save the MP4 to this device, then attach it in Instagram">
+                      <a href={n.video_url} download className="btn-ghost text-xs border border-prospex-border" title="Save the MP4 to this device">
                         <Download className="w-3.5 h-3.5" />MP4
+                      </a>
+                    )}
+                    {n.audio_url && (
+                      <a href={n.audio_url} download className="btn-ghost text-xs border border-prospex-border" title="Save the MP3 to this device">
+                        <Download className="w-3.5 h-3.5" />MP3
                       </a>
                     )}
                     <button onClick={() => setEditing(n)} className="p-1.5 rounded hover:bg-prospex-bg" aria-label="Edit">
